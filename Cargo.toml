@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["engine", "native", "web"]
+default-members = ["native"]
+
+[profile.dev]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = true

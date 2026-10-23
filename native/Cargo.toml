@@ -1,0 +1,9 @@
+[package]
+name = "native"
+version = "0.1.0"
+edition = "2021"
+default-run = "native"
+
+[dependencies]
+engine = { path = "../engine" }
+minifb = "0.28"

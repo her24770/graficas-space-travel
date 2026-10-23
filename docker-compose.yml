@@ -1,0 +1,10 @@
+# Simula la versión web en local: http://localhost:3220
+services:
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    container_name: space_web
+    ports:
+      - "127.0.0.1:3220:80"
+    restart: unless-stopped
