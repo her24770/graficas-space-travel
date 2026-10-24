@@ -1,4 +1,4 @@
-# Simula la versión web en local: http://localhost:3220
+# Simula producción en local: http://localhost:3220 (web + servidor multijugador)
 services:
   web:
     build:
@@ -7,4 +7,15 @@ services:
     container_name: space_web
     ports:
       - "127.0.0.1:3220:80"
+    depends_on:
+      - server
+    restart: unless-stopped
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: space_server
+    ports:
+      - "127.0.0.1:3221:8000"
     restart: unless-stopped

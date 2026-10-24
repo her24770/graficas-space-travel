@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["engine", "native", "web"]
+members = ["engine", "native", "web", "protocol", "server"]
 default-members = ["native"]
 
 [profile.dev]
