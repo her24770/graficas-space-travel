@@ -1,0 +1,11 @@
+# Producción: nginx sirve la carpeta ./dist que sube GitHub Actions.
+# Nada se compila en el servidor, y al cambiar ./dist no hay que reiniciar el contenedor.
+services:
+  web:
+    image: nginx:alpine
+    container_name: space_web
+    ports:
+      - "127.0.0.1:3220:80"
+    volumes:
+      - ./dist:/usr/share/nginx/html:ro
+    restart: unless-stopped

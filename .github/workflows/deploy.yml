@@ -1,0 +1,63 @@
+name: Deploy
+# Se despliega solo al hacer merge a main, o a mano desde Actions → Deploy → Run workflow
+# eligiendo la rama que se quiera ver en el servidor.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Versión de wasm-bindgen (la fija Cargo.lock)
+        id: wb
+        run: echo "ver=$(awk '/^name = "wasm-bindgen"$/{getline; gsub(/[" ]/,"",$3); print $3; exit}' Cargo.lock)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-bindgen
+          key: wasm-bindgen-${{ steps.wb.outputs.ver }}
+      - name: Instalar wasm-bindgen-cli
+        run: command -v wasm-bindgen || cargo install wasm-bindgen-cli --version ${{ steps.wb.outputs.ver }} --locked
+
+      - name: Compilar la web
+        run: |
+          cargo build -p web --release --target wasm32-unknown-unknown
+          mkdir -p dist
+          wasm-bindgen --target web --out-dir dist/pkg target/wasm32-unknown-unknown/release/web.wasm
+          cp web/www/* dist/
+          echo "${{ github.ref_name }} @ ${GITHUB_SHA::7} — $(date -u +'%Y-%m-%d %H:%M UTC')" > dist/version.txt
+
+      - name: Configurar SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          echo "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      - name: Subir al servidor
+        env:
+          SSH: ssh -i ~/.ssh/deploy_key
+          DEST: ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.DEPLOY_PATH }}
+        run: |
+          rsync -az --delete -e "$SSH" dist/ "$DEST/dist/"
+          rsync -az -e "$SSH" deploy/docker-compose.yml "$DEST/docker-compose.yml"
+          $SSH ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "cd ${{ secrets.DEPLOY_PATH }} && docker compose up -d"
+
+      - name: Comprobar que responde
+        if: vars.DEPLOY_URL != ''
+        run: curl -fsS --retry 5 --retry-delay 3 "${{ vars.DEPLOY_URL }}/version.txt"
