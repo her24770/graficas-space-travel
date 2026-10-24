@@ -9,6 +9,7 @@ pub mod input;
 pub mod math;
 pub mod obj;
 pub mod raster;
+pub mod remote;
 pub mod rng;
 pub mod ship;
 
@@ -17,4 +18,5 @@ pub use game::Game;
 pub use input::Input;
 pub use math::{Mat4, Vec3, Vec4};
 pub use obj::Mesh;
+pub use remote::RemoteShip;
 pub use ship::Ship;

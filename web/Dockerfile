@@ -15,3 +15,4 @@ RUN cargo build -p web --release --target wasm32-unknown-unknown \
 
 FROM nginx:alpine
 COPY --from=build /out /usr/share/nginx/html
+COPY web/nginx.conf /etc/nginx/conf.d/default.conf

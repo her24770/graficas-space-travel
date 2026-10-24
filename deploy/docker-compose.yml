@@ -1,5 +1,6 @@
-# Producción: nginx sirve la carpeta ./dist que sube GitHub Actions.
-# Nada se compila en el servidor, y al cambiar ./dist no hay que reiniciar el contenedor.
+# Producción: nginx sirve ./dist (lo sube GitHub Actions) y el servidor corre desde una imagen
+# ya construida en CI (`docker load`). Nada se compila en este servidor.
+# El nginx del host enruta: / → 3220 y /ws → 3221 (ver deploy/README.md).
 services:
   web:
     image: nginx:alpine
@@ -9,3 +10,16 @@ services:
     volumes:
       - ./dist:/usr/share/nginx/html:ro
     restart: unless-stopped
+    networks: [space_net]
+
+  server:
+    image: space-server:latest
+    container_name: space_server
+    ports:
+      - "127.0.0.1:3221:8000"
+    restart: unless-stopped
+    networks: [space_net]
+
+networks:
+  space_net:
+    driver: bridge

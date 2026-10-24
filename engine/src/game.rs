@@ -1,5 +1,11 @@
 use crate::{
-    assets, camera::ChaseCamera, input::Input, obj, raster, rng::Rng, Framebuffer, Mat4, Mesh, Ship, Vec3,
+    assets,
+    camera::ChaseCamera,
+    input::Input,
+    obj, raster,
+    remote::{RemotePlayer, RemoteShip},
+    rng::Rng,
+    Framebuffer, Mat4, Mesh, Ship, Vec3,
 };
 use std::f32::consts::PI;
 
@@ -7,6 +13,8 @@ const FOV_Y: f32 = 60.0 * PI / 180.0;
 const FONDO: u32 = 0x02020A;
 const LUZ: Vec3 = Vec3::new(-0.4, -0.7, -0.5);
 const DT_MAX: f32 = 0.05; // evita saltos al volver de una pestaña inactiva
+const COLOR_PROPIO: u32 = 0xDDDDDD;
+const COLORES_JUGADORES: [u32; 6] = [0x42A5F5, 0xEF5350, 0x66BB6A, 0xFFCA28, 0xAB47BC, 0x26C6DA];
 
 struct Model {
     name: String,
@@ -35,6 +43,8 @@ pub struct Game {
     cube: Mesh,
     markers: Vec<Marker>,
     stars: Vec<Star>,
+    remotes: Vec<RemotePlayer>,
+    online: bool,
 }
 
 impl Game {
@@ -74,7 +84,18 @@ impl Game {
 
         let ship = Ship::new();
         let camera = ChaseCamera::new(&ship);
-        Self { time: 0.0, ship, camera, models, selected, cube: Mesh::cube(), markers, stars }
+        Self {
+            time: 0.0,
+            ship,
+            camera,
+            models,
+            selected,
+            cube: Mesh::cube(),
+            markers,
+            stars,
+            remotes: Vec::new(),
+            online: false,
+        }
     }
 
     pub fn update(&mut self, dt: f32, input: &Input) {
@@ -85,6 +106,42 @@ impl Game {
         }
         self.ship.update(input, dt);
         self.camera.update(&self.ship, dt);
+        for r in &mut self.remotes {
+            r.update(dt);
+        }
+    }
+
+    /// Mi nave tal como la ven los demás (el id lo pone el servidor).
+    pub fn local_state(&self) -> RemoteShip {
+        RemoteShip {
+            id: 0,
+            position: self.ship.position,
+            yaw: self.ship.yaw,
+            pitch: self.ship.pitch,
+            model: self.selected as u8,
+        }
+    }
+
+    /// Reemplaza la lista de otros jugadores; los que ya no están desaparecen.
+    pub fn set_remote_players(&mut self, list: &[RemoteShip]) {
+        self.remotes.retain(|r| list.iter().any(|s| s.id == r.target.id));
+        for s in list {
+            match self.remotes.iter_mut().find(|r| r.target.id == s.id) {
+                Some(r) => r.target = *s,
+                None => self.remotes.push(RemotePlayer::new(*s)),
+            }
+        }
+    }
+
+    pub fn set_online(&mut self, online: bool) {
+        self.online = online;
+        if !online {
+            self.remotes.clear();
+        }
+    }
+
+    pub fn remote_count(&self) -> usize {
+        self.remotes.len()
     }
 
     pub fn render(&self, fb: &mut Framebuffer) {
@@ -105,14 +162,27 @@ impl Game {
             raster::draw_mesh(fb, &self.cube, &model, &vp, m.color, LUZ);
         }
 
+        for r in &self.remotes {
+            let s = &r.shown;
+            let mesh = &self.models[s.model as usize % self.models.len()].mesh;
+            let model = Mat4::translation(s.position) * Mat4::rotation_y(s.yaw) * Mat4::rotation_x(s.pitch);
+            let color = COLORES_JUGADORES[s.id as usize % COLORES_JUGADORES.len()];
+            raster::draw_mesh(fb, mesh, &model, &vp, color, LUZ);
+        }
+
         let model = Mat4::translation(self.ship.position) * self.ship.rotation();
-        raster::draw_mesh(fb, &self.models[self.selected].mesh, &model, &vp, 0xDDDDDD, LUZ);
+        raster::draw_mesh(fb, &self.models[self.selected].mesh, &model, &vp, COLOR_PROPIO, LUZ);
     }
 
     /// Texto para el título de la ventana.
     pub fn status(&self) -> String {
+        let red = if self.online {
+            format!("online: {} jugadores", 1 + self.remotes.len())
+        } else {
+            "sin conexión".to_string()
+        };
         format!(
-            "Space Travel | nave: {} (Tab cambia) | vel {:.1} u/s",
+            "Space Travel | nave: {} (Tab cambia) | vel {:.1} u/s | {red}",
             self.models[self.selected].name,
             self.ship.speed()
         )
@@ -122,6 +192,10 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rival(id: u32, x: f32) -> RemoteShip {
+        RemoteShip { id, position: Vec3::new(x, 0.0, -10.0), yaw: 0.0, pitch: 0.0, model: 0 }
+    }
 
     #[test]
     fn el_tiempo_avanza_con_dt() {
@@ -153,5 +227,34 @@ mod tests {
         g.update(0.016, &Input { forward: true, ..Default::default() });
         g.render(&mut fb);
         assert!(fb.pixels.iter().any(|&p| p != FONDO));
+    }
+
+    #[test]
+    fn los_jugadores_remotos_entran_y_salen() {
+        let mut g = Game::new(1);
+        g.set_remote_players(&[rival(1, 0.0), rival(2, 3.0)]);
+        assert_eq!(g.remote_count(), 2);
+        g.set_remote_players(&[rival(2, 4.0)]);
+        assert_eq!(g.remote_count(), 1);
+        g.set_online(false);
+        assert_eq!(g.remote_count(), 0);
+    }
+
+    #[test]
+    fn un_rival_a_la_vista_cambia_la_imagen() {
+        let mut g = Game::new(1);
+        let mut sin = Framebuffer::new(320, 240);
+        g.render(&mut sin);
+        g.set_remote_players(&[rival(3, 4.0)]);
+        let mut con = Framebuffer::new(320, 240);
+        g.render(&mut con);
+        assert_ne!(sin.pixels, con.pixels);
+    }
+
+    #[test]
+    fn el_estado_local_refleja_la_nave() {
+        let mut g = Game::new(1);
+        g.update(0.05, &Input { forward: true, ..Default::default() });
+        assert!(g.local_state().position.z < 0.0);
     }
 }

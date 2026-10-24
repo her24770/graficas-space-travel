@@ -42,6 +42,17 @@ jobs:
           cp web/www/* dist/
           echo "${{ github.ref_name }} @ ${GITHUB_SHA::7} — $(date -u +'%Y-%m-%d %H:%M UTC')" > dist/version.txt
 
+      - name: Construir la imagen del servidor
+        uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: server/Dockerfile
+          tags: space-server:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Configurar SSH
         run: |
           install -m 700 -d ~/.ssh
@@ -56,8 +67,12 @@ jobs:
         run: |
           rsync -az --delete -e "$SSH" dist/ "$DEST/dist/"
           rsync -az -e "$SSH" deploy/docker-compose.yml "$DEST/docker-compose.yml"
+          # La imagen viaja por SSH (unos pocos MB); el servidor nunca compila.
+          docker save space-server:latest | gzip | $SSH ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "gunzip | docker load"
           $SSH ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "cd ${{ secrets.DEPLOY_PATH }} && docker compose up -d"
 
       - name: Comprobar que responde
         if: vars.DEPLOY_URL != ''
-        run: curl -fsS --retry 5 --retry-delay 3 "${{ vars.DEPLOY_URL }}/version.txt"
+        run: |
+          curl -fsS --retry 5 --retry-delay 3 "${{ vars.DEPLOY_URL }}/version.txt"
+          curl -fsS --retry 5 --retry-delay 3 "${{ vars.DEPLOY_URL }}/health"
