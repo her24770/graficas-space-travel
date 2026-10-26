@@ -6,6 +6,8 @@ use std::fmt;
 pub struct Mesh {
     pub vertices: Vec<Vec3>,
     pub triangles: Vec<[u32; 3]>,
+    /// Una normal por vértice para sombreado suave. Vacío = sombreado plano por cara.
+    pub normals: Vec<Vec3>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -97,6 +99,7 @@ impl Mesh {
                 [0, 4, 7], [0, 7, 3], [1, 2, 6], [1, 6, 5],
                 [0, 1, 5], [0, 5, 4], [3, 7, 6], [3, 6, 2],
             ],
+            normals: Vec::new(),
         }
     }
 
@@ -115,6 +118,7 @@ impl Mesh {
         Mesh {
             vertices: self.vertices.iter().map(|v| (*v - center) * k).collect(),
             triangles: self.triangles.clone(),
+            normals: self.normals.clone(),
         }
     }
 }

@@ -4,17 +4,23 @@
 pub mod assets;
 pub mod camera;
 pub mod framebuffer;
+pub mod frustum;
 pub mod game;
+pub mod hud;
 pub mod input;
 pub mod math;
 pub mod obj;
+pub mod procedural;
+pub mod race;
 pub mod raster;
 pub mod remote;
 pub mod rng;
+pub mod scenario;
+pub mod shaders;
 pub mod ship;
 
 pub use framebuffer::Framebuffer;
-pub use game::Game;
+pub use game::{Game, RenderStats};
 pub use input::Input;
 pub use math::{Mat4, Vec3, Vec4};
 pub use obj::Mesh;

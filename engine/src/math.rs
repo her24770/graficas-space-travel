@@ -34,6 +34,14 @@ impl Vec3 {
         self.dot(self).sqrt()
     }
 
+    pub fn distance(self, o: Vec3) -> f32 {
+        (self - o).length()
+    }
+
+    pub fn lerp(self, o: Vec3, t: f32) -> Vec3 {
+        self + (o - self) * t
+    }
+
     /// Devuelve el vector unitario; si es nulo, devuelve cero.
     pub fn normalize(self) -> Vec3 {
         let l = self.length();
