@@ -1,11 +1,11 @@
 //! La nave: aceleración, frenado y giro progresivos, todo en función de `dt`.
 use crate::{input::Input, Mat4, Vec3};
 
-const EMPUJE: f32 = 25.0; // u/s²
-const EMPUJE_REVERSA: f32 = 12.0;
+const EMPUJE: f32 = 40.0; // u/s²
+const EMPUJE_REVERSA: f32 = 20.0;
 const ARRASTRE: f32 = 0.5; // 1/s, frenado natural
 const ARRASTRE_FRENO: f32 = 3.0;
-const VEL_MAX: f32 = 40.0;
+const VEL_MAX: f32 = 90.0;
 const GIRO_YAW: f32 = 1.6; // rad/s máximos
 const GIRO_PITCH: f32 = 1.2;
 const SUAVIZADO_GIRO: f32 = 6.0; // más alto = responde más rápido
@@ -23,6 +23,11 @@ pub struct Ship {
 impl Ship {
     pub fn new() -> Self {
         Self { position: Vec3::ZERO, velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, yaw_rate: 0.0, pitch_rate: 0.0 }
+    }
+
+    /// Coloca la nave en reposo (salida de la carrera).
+    pub fn reset(&mut self, position: Vec3, yaw: f32, pitch: f32) {
+        *self = Ship { position, yaw, pitch, ..Ship::new() };
     }
 
     pub fn rotation(&self) -> Mat4 {

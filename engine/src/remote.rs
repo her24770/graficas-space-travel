@@ -9,6 +9,10 @@ pub struct RemoteShip {
     pub yaw: f32,
     pub pitch: f32,
     pub model: u8,
+    /// Puntos de control cruzados.
+    pub progress: u8,
+    /// Milisegundos de carrera al terminar; 0 = aún no termina.
+    pub finish_ms: u32,
 }
 
 const SUAVIZADO: f32 = 12.0;
@@ -35,6 +39,8 @@ impl RemotePlayer {
         s.yaw += wrap_angle(t.yaw - s.yaw) * k;
         s.pitch += (t.pitch - s.pitch) * k;
         s.model = t.model;
+        s.progress = t.progress;
+        s.finish_ms = t.finish_ms;
     }
 }
 
@@ -43,7 +49,7 @@ mod tests {
     use super::*;
 
     fn nave(x: f32, yaw: f32) -> RemoteShip {
-        RemoteShip { id: 1, position: Vec3::new(x, 0.0, 0.0), yaw, pitch: 0.0, model: 0 }
+        RemoteShip { id: 1, position: Vec3::new(x, 0.0, 0.0), yaw, pitch: 0.0, model: 0, progress: 0, finish_ms: 0 }
     }
 
     #[test]
