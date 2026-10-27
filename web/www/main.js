@@ -18,9 +18,8 @@ const TECLAS = {
   KeyW: 1, KeyS: 2, KeyA: 4, KeyD: 8, ArrowLeft: 4, ArrowRight: 8,
   ArrowUp: 16, ArrowDown: 32, Space: 64,
 };
-const CICLAR_MODELO = 128; // Tab
-const EMPEZAR = 256; // Enter
-const MENU = 512; // M
+// Teclas de una sola pulsación (mismos bits que engine::input::bits)
+const UNA_VEZ = { Tab: 128, Enter: 256, KeyM: 512, KeyG: 1024, KeyO: 2048, KeyV: 4096, KeyR: 8192 };
 let presionadas = 0;
 let unaVez = 0;
 
@@ -30,9 +29,7 @@ function pantallaCompleta() {
 }
 
 addEventListener("keydown", (e) => {
-  if (e.code === "Tab") { if (!e.repeat) unaVez |= CICLAR_MODELO; e.preventDefault(); return; }
-  if (e.code === "Enter") { if (!e.repeat) unaVez |= EMPEZAR; e.preventDefault(); return; }
-  if (e.code === "KeyM") { if (!e.repeat) unaVez |= MENU; e.preventDefault(); return; }
+  if (e.code in UNA_VEZ) { if (!e.repeat) unaVez |= UNA_VEZ[e.code]; e.preventDefault(); return; }
   if (e.code === "KeyF") { if (!e.repeat) pantallaCompleta(); e.preventDefault(); return; }
   if (e.code in TECLAS) { presionadas |= TECLAS[e.code]; e.preventDefault(); }
 });

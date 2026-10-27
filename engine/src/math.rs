@@ -188,6 +188,29 @@ impl Mat4 {
         }
     }
 
+    /// Transpuesta. Para una rotación pura es su inversa.
+    pub fn transposed(&self) -> Mat4 {
+        let mut r = *self;
+        for (i, row) in r.m.iter_mut().enumerate() {
+            for (j, cell) in row.iter_mut().enumerate() {
+                *cell = self.m[j][i];
+            }
+        }
+        r
+    }
+
+    /// Rotación cuyas columnas son los ejes `x`, `y`, `z` (deben ser unitarios y perpendiculares).
+    pub fn from_basis(x: Vec3, y: Vec3, z: Vec3) -> Mat4 {
+        Mat4 {
+            m: [
+                [x.x, y.x, z.x, 0.0],
+                [x.y, y.y, z.y, 0.0],
+                [x.z, y.z, z.z, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+        }
+    }
+
     pub fn without_translation(mut self) -> Mat4 {
         self.m[0][3] = 0.0;
         self.m[1][3] = 0.0;
@@ -242,6 +265,21 @@ mod tests {
 
     fn cerca(a: Vec3, b: Vec3) -> bool {
         (a - b).length() < 1e-5
+    }
+
+    #[test]
+    fn la_transpuesta_de_una_rotacion_la_deshace() {
+        let r = Mat4::rotation_z(0.4) * Mat4::rotation_y(1.1);
+        let p = Vec3::new(1.0, -2.0, 0.5);
+        assert!(cerca(r.transposed().transform_dir(r.transform_dir(p)), p));
+    }
+
+    #[test]
+    fn from_basis_lleva_cada_eje_a_su_columna() {
+        let (x, y, z) = (Vec3::new(0.0, 0.0, -1.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
+        let m = Mat4::from_basis(x, y, z);
+        assert!(cerca(m.transform_dir(Vec3::Y), y));
+        assert!(cerca(m.transform_dir(Vec3::new(0.0, 0.0, 1.0)), z));
     }
 
     #[test]

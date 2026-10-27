@@ -4,14 +4,18 @@ use crate::{
     frustum::Frustum,
     hud,
     input::Input,
-    obj, procedural,
+    obj,
+    orbit::{self, Orbit},
+    physics::{self, Body},
+    procedural,
+    props::{self, PropInstance},
     race::{Phase, Race},
     raster::{self, draw_mesh},
     remote::{RemotePlayer, RemoteShip},
     rng::Rng,
-    scenario::{self, Gate, GATE_COUNT, PLANETS, SUN_RADIUS},
+    scenario::{self, Gate, GATE_COUNT, PLANETS, PROPS_SEED, SUN_GRAVITY, SUN_RADIUS},
     shaders::{Material, Scene},
-    Framebuffer, Mat4, Mesh, Ship, Vec3,
+    terrain, Framebuffer, Mat4, Mesh, Ship, Vec3,
 };
 use std::f32::consts::PI;
 
@@ -22,16 +26,48 @@ const COLOR_PROPIO: u32 = 0xDDDDDD;
 const COLORES_JUGADORES: [u32; 6] = [0x42A5F5, 0xEF5350, 0x66BB6A, 0xFFCA28, 0xAB47BC, 0x26C6DA];
 const COLOR_SIGUIENTE: u32 = 0xFFD54F;
 const COLOR_PUNTO: u32 = 0x42A5F5;
-/// Subdivisiones de la esfera, de menos a más detalle (LOD): 80, 320, 1280 y 5120 triángulos.
 /// Mitad del lado del minimapa, en unidades de HUD (se multiplica por la escala del texto).
 const MINIMAPA_MITAD: i32 = 32;
+/// Subdivisiones de la esfera, de menos a más detalle (LOD): 80, 320, 1280 y 5120 triángulos.
 const LOD_NIVELES: [u32; 4] = [1, 2, 3, 4];
+/// Radio de la nave para chocar (todo modelo de nave se normaliza a radio 1).
+const NAVE_RADIO: f32 = 1.0;
+/// Velocidad de impacto mínima para contar un choque (apoyarse en el suelo no cuenta).
+const IMPACTO_MIN: f32 = 1.0;
+/// Segundos que se muestra un aviso en pantalla.
+const AVISO_S: f32 = 2.0;
+/// Se puede entrar en órbita a menos de esta altura sobre la superficie (en radios del cuerpo).
+const CAPTURA_RADIOS: f32 = 5.0;
+/// Los objetos de superficie se dibujan a menos de esta distancia (en radios del planeta).
+const PROPS_DISTANCIA: f32 = 14.0;
 
 /// Pantalla en la que está el jugador: el menú de inicio o el juego.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
     Menu,
     Playing,
+}
+
+/// Desde dónde se ve la nave.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewMode {
+    ThirdPerson,
+    /// Desde la cabina: la nave propia no se dibuja para no tapar la vista.
+    FirstPerson,
+}
+
+/// Un choque de la nave contra el sol o un planeta. Es el punto donde conectar efectos
+/// visuales o de sonido: se leen con `Game::take_collisions`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollisionEvent {
+    /// "SOL" o el nombre del planeta.
+    pub body: &'static str,
+    /// Punto de la superficie donde chocó.
+    pub position: Vec3,
+    /// Hacia afuera de la superficie.
+    pub normal: Vec3,
+    /// Qué tan rápido iba hacia el suelo.
+    pub impact_speed: f32,
 }
 
 struct Model {
@@ -58,6 +94,7 @@ struct View<'a> {
     scene: Scene,
     /// Píxeles por unidad a distancia 1; sirve para elegir el LOD.
     focal: f32,
+    eye: Vec3,
 }
 
 struct Entry {
@@ -91,6 +128,29 @@ pub struct Game {
     start_request: bool,
     screen: Screen,
     prev_input: Input,
+    /// Esferas con relieve de cada planeta, una por nivel de LOD (`None` = planeta liso).
+    planet_lods: Vec<Option<Vec<Mesh>>>,
+    /// Mallas de los objetos de superficie; la 0 es el cono de prueba.
+    prop_meshes: Vec<Mesh>,
+    /// `[planeta][tipo]` → índice en `prop_meshes`.
+    prop_mesh_of: Vec<Vec<usize>>,
+    placements: Vec<Vec<PropInstance>>,
+    props_seed: u64,
+    gravity_on: bool,
+    view: ViewMode,
+    orbit: Option<Orbit>,
+    collisions: Vec<CollisionEvent>,
+    /// Aviso en pantalla: texto, color y hasta cuándo (segundos de `time`).
+    notice: Option<(String, u32, f32)>,
+}
+
+/// Nombre del cuerpo `i` (0 = sol, 1.. = planetas).
+fn body_name(i: usize) -> &'static str {
+    if i == 0 {
+        "SOL"
+    } else {
+        PLANETS[i - 1].name
+    }
 }
 
 impl Game {
@@ -117,6 +177,35 @@ impl Game {
             })
             .collect();
 
+        let planet_lods = PLANETS
+            .iter()
+            .map(|p| {
+                (p.relief > 0.0).then(|| {
+                    LOD_NIVELES
+                        .iter()
+                        .map(|&n| procedural::displaced_sphere(n, |d| 1.0 + p.relief * terrain::elevation(&p.material, d)))
+                        .collect()
+                })
+            })
+            .collect();
+
+        let mut prop_meshes = vec![procedural::cone(8)];
+        let prop_mesh_of = PLANETS
+            .iter()
+            .map(|p| {
+                p.props
+                    .iter()
+                    .map(|def| {
+                        let modelo = assets::PROPS.iter().find(|(n, _)| *n == def.model).and_then(|(_, b)| obj::parse(b).ok());
+                        modelo.map_or(0, |m| {
+                            prop_meshes.push(m.grounded());
+                            prop_meshes.len() - 1
+                        })
+                    })
+                    .collect()
+            })
+            .collect();
+
         let mut game = Self {
             time: 0.0,
             world_time: 0.0,
@@ -138,7 +227,18 @@ impl Game {
             start_request: false,
             screen: Screen::Menu,
             prev_input: Input::default(),
+            planet_lods,
+            prop_meshes,
+            prop_mesh_of,
+            placements: Vec::new(),
+            props_seed: PROPS_SEED,
+            gravity_on: true,
+            view: ViewMode::ThirdPerson,
+            orbit: None,
+            collisions: Vec::new(),
+            notice: None,
         };
+        game.placements = Self::place_props(PROPS_SEED);
         game.place_on_grid();
         game
     }
@@ -148,6 +248,138 @@ impl Game {
         let (pos, yaw, pitch) = scenario::grid_slot(self.slot);
         self.ship.reset(pos, yaw, pitch);
         self.camera = ChaseCamera::new(&self.ship);
+        self.orbit = None;
+    }
+
+    fn place_props(seed: u64) -> Vec<Vec<PropInstance>> {
+        PLANETS.iter().enumerate().map(|(i, p)| props::place(i, p, seed)).collect()
+    }
+
+    /// Cambia la semilla de los objetos de superficie y los vuelve a colocar.
+    pub fn set_props_seed(&mut self, seed: u64) {
+        self.props_seed = seed;
+        self.placements = Self::place_props(seed);
+    }
+
+    pub fn props_seed(&self) -> u64 {
+        self.props_seed
+    }
+
+    pub fn view_mode(&self) -> ViewMode {
+        self.view
+    }
+
+    pub fn gravity_enabled(&self) -> bool {
+        self.gravity_on
+    }
+
+    /// Cuerpo que se está orbitando (0 = sol, 1.. = planetas), si hay.
+    pub fn orbiting(&self) -> Option<usize> {
+        self.orbit.map(|o| o.body)
+    }
+
+    /// Choques ocurridos desde la última llamada (para conectar efectos).
+    pub fn take_collisions(&mut self) -> Vec<CollisionEvent> {
+        std::mem::take(&mut self.collisions)
+    }
+
+    fn notice(&mut self, text: String, color: u32) {
+        self.notice = Some((text, color, self.time + AVISO_S));
+    }
+
+    /// Sol y planetas en este instante, con su gravedad: 0 = sol, 1.. = planetas.
+    fn bodies(&self) -> Vec<Body> {
+        let t = self.world_time;
+        std::iter::once(Body { center: Vec3::ZERO, radius: SUN_RADIUS, surface_gravity: SUN_GRAVITY, velocity: Vec3::ZERO })
+            .chain(PLANETS.iter().map(|p| Body {
+                center: scenario::planet_position(p, t),
+                radius: p.radius,
+                surface_gravity: p.gravity,
+                velocity: scenario::planet_velocity(p, t),
+            }))
+            .collect()
+    }
+
+    /// Radio de la superficie del cuerpo `i` en la dirección del punto `p`: tiene en cuenta el
+    /// relieve y que el planeta está girando.
+    fn surface_at(&self, i: usize, b: &Body, p: Vec3) -> f32 {
+        if i == 0 {
+            return SUN_RADIUS;
+        }
+        let planet = &PLANETS[i - 1];
+        let local = scenario::planet_rotation(planet, self.world_time).transposed().transform_dir(p - b.center);
+        scenario::surface_radius(planet, local)
+    }
+
+    fn max_surface(i: usize) -> f32 {
+        if i == 0 {
+            SUN_RADIUS
+        } else {
+            scenario::max_radius(&PLANETS[i - 1])
+        }
+    }
+
+    fn resolve_collisions(&mut self, dt: f32) {
+        for (i, b) in self.bodies().iter().enumerate() {
+            let surface = self.surface_at(i, b, self.ship.position);
+            let choque = physics::collide(&mut self.ship.position, &mut self.ship.velocity, NAVE_RADIO, b.center, b.velocity, surface, dt);
+            if let Some(c) = choque.filter(|c| c.impact_speed > IMPACTO_MIN) {
+                let body = body_name(i);
+                self.collisions.push(CollisionEvent {
+                    body,
+                    position: self.ship.position - c.normal * NAVE_RADIO,
+                    normal: c.normal,
+                    impact_speed: c.impact_speed,
+                });
+                if self.collisions.len() > 32 {
+                    self.collisions.remove(0); // nadie los está leyendo: no crecer sin límite
+                }
+                self.notice(format!("COLISION: {body}"), 0xEF5350);
+            }
+        }
+    }
+
+    fn toggle_orbit(&mut self) {
+        if let Some(o) = self.orbit.take() {
+            // La nave sigue con la velocidad que llevaba en la órbita.
+            self.notice(format!("SALISTE DE LA ORBITA DE {}", body_name(o.body)), 0x90A4AE);
+            return;
+        }
+        let bodies = self.bodies();
+        let cercano = bodies
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (i, b, self.ship.position.distance(b.center) - Self::max_surface(i)))
+            .filter(|(_, b, altura)| *altura < b.radius * CAPTURA_RADIOS)
+            .min_by(|a, b| a.2.total_cmp(&b.2));
+        match cercano {
+            Some((i, b, _)) => {
+                let offset = self.ship.position - b.center;
+                let radio = offset.length().max(Self::max_surface(i) + NAVE_RADIO + 2.0);
+                let speed = orbit::circular_speed(b.surface_gravity, b.radius, radio);
+                let mut o = Orbit::enter(i, offset, self.ship.velocity - b.velocity, self.ship.forward(), speed);
+                o.radius = radio;
+                self.orbit = Some(o);
+                self.notice(format!("ORBITANDO {}", body_name(i)), 0x66BB6A);
+            }
+            None => self.notice("NADA CERCA PARA ORBITAR".into(), 0x90A4AE),
+        }
+    }
+
+    /// Avanza la órbita con los controles locales y coloca la nave en ella.
+    fn fly_orbit(&mut self, mut o: Orbit, input: &Input, dt: f32) {
+        let b = self.bodies()[o.body];
+        let piso = Self::max_surface(o.body) + NAVE_RADIO + 2.0;
+        let techo = Self::max_surface(o.body) + b.radius * CAPTURA_RADIOS * 2.0;
+        let eje = |mas: bool, menos: bool| mas as i32 as f32 - menos as i32 as f32;
+        o.update(dt, eje(input.pitch_up, input.pitch_down), eje(input.forward, input.backward), eje(input.yaw_left, input.yaw_right), piso, techo);
+        let t = o.tangent();
+        let (yaw, pitch) = scenario::ship_orientation(t);
+        self.ship.position = o.position(b.center);
+        self.ship.velocity = t * o.speed + b.velocity;
+        self.ship.yaw = yaw;
+        self.ship.pitch = pitch;
+        self.orbit = Some(o);
     }
 
     fn next_model(&mut self, delta: isize) {
@@ -187,6 +419,25 @@ impl Game {
             }
         }
 
+        if self.screen == Screen::Playing {
+            if input.toggle_gravity {
+                self.gravity_on = !self.gravity_on;
+            }
+            if input.toggle_view {
+                self.view = match self.view {
+                    ViewMode::ThirdPerson => ViewMode::FirstPerson,
+                    ViewMode::FirstPerson => ViewMode::ThirdPerson,
+                };
+            }
+            if input.toggle_orbit && self.race.phase != Phase::Countdown {
+                self.toggle_orbit();
+            }
+        }
+        if input.reseed {
+            self.set_props_seed(self.props_seed + 1);
+            self.notice(format!("SEMILLA {}", self.props_seed), 0x90A4AE);
+        }
+
         self.race.update(dt, self.online);
         if self.race.phase != self.last_phase {
             if self.race.phase == Phase::Countdown {
@@ -200,9 +451,28 @@ impl Game {
 
         // En el menú y en la cuenta regresiva la nave espera quieta en la parrilla.
         let quieta = self.screen == Screen::Menu || self.race.phase == Phase::Countdown;
-        let ctrl = if quieta { Input::default() } else { *input };
-        self.ship.update(&ctrl, dt);
-        self.camera.update(&self.ship, dt);
+        match self.orbit.filter(|_| !quieta) {
+            Some(o) => self.fly_orbit(o, input, dt),
+            None => {
+                let ctrl = if quieta { Input::default() } else { *input };
+                if self.gravity_on && !quieta {
+                    self.ship.velocity += physics::gravity_at(self.ship.position, &self.bodies()) * dt;
+                }
+                self.ship.update(&ctrl, dt);
+                if !quieta {
+                    self.resolve_collisions(dt);
+                }
+            }
+        }
+        match self.orbit {
+            // En órbita la cámara va detrás y por encima, mirando hacia el planeta para que se vea.
+            Some(o) => {
+                let centro = self.bodies()[o.body].center;
+                let ojo = self.ship.position + o.radial() * 8.0 - o.tangent() * 10.0;
+                self.camera.follow(ojo, self.ship.position.lerp(centro, 0.35), dt);
+            }
+            None => self.camera.update(&self.ship, dt),
+        }
         self.check_gates();
         for r in &mut self.remotes {
             r.update(dt);
@@ -327,10 +597,33 @@ impl Game {
         self.progress
     }
 
-    fn lod_mesh(&self, dist: f32, radius: f32, focal: f32) -> &Mesh {
+    /// Nivel de detalle según cuántos píxeles mide el objeto en pantalla.
+    fn lod_index(dist: f32, radius: f32, focal: f32) -> usize {
         let px = radius / dist.max(0.001) * focal;
-        let i = if px > 120.0 { 3 } else if px > 40.0 { 2 } else if px > 12.0 { 1 } else { 0 };
-        &self.spheres[i]
+        if px > 120.0 {
+            3
+        } else if px > 40.0 {
+            2
+        } else if px > 12.0 {
+            1
+        } else {
+            0
+        }
+    }
+
+    /// Cámara activa: la del menú, la de cabina o la que sigue a la nave.
+    fn camera_pose(&self) -> (Vec3, Vec3) {
+        if self.screen == Screen::Menu {
+            return self.menu_camera();
+        }
+        match self.view {
+            ViewMode::FirstPerson => {
+                let rot = self.ship.rotation();
+                let eye = self.ship.position + rot.transform_dir(Vec3::new(0.0, 0.3, 0.0));
+                (eye, eye + rot.transform_dir(Vec3::new(0.0, 0.0, -10.0)))
+            }
+            ViewMode::ThirdPerson => (self.camera.eye, self.camera.target),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -350,7 +643,7 @@ impl Game {
         let aspect = fb.width as f32 / fb.height as f32;
         let proj = Mat4::perspective(FOV_Y, aspect, 0.5, 6000.0);
         let menu = self.screen == Screen::Menu;
-        let (eye, target) = if menu { self.menu_camera() } else { (self.camera.eye, self.camera.target) };
+        let (eye, target) = self.camera_pose();
         let view = Mat4::look_at(eye, target, Vec3::Y);
 
         // Estrellas: solo rotan con la cámara, no se acercan al moverte.
@@ -366,6 +659,7 @@ impl Game {
             frustum: &frustum,
             scene: Scene { time: self.time, light_pos: Vec3::ZERO, eye },
             focal: fb.height as f32 * 0.5 / (FOV_Y * 0.5).tan(),
+            eye,
         };
         let mut st = RenderStats::default();
         let t = self.world_time;
@@ -373,16 +667,28 @@ impl Game {
         // Sol
         let spin = Mat4::rotation_y((t * 0.02) as f32);
         let model = spin * Mat4::scale(Vec3::new(SUN_RADIUS, SUN_RADIUS, SUN_RADIUS));
-        let mesh = self.lod_mesh(eye.length(), SUN_RADIUS, v.focal);
+        let mesh = &self.spheres[Self::lod_index(eye.length(), SUN_RADIUS, v.focal)];
         self.draw_object(fb, &v, &mut st, mesh, &model, Vec3::ZERO, SUN_RADIUS, &Material::Sun);
 
         // Planetas
-        for p in &PLANETS {
+        for (i, p) in PLANETS.iter().enumerate() {
             let pos = scenario::planet_position(p, t);
-            let rot = Mat4::rotation_z(p.tilt) * Mat4::rotation_y(scenario::planet_spin(p, t));
+            let rot = scenario::planet_rotation(p, t);
             let model = Mat4::translation(pos) * rot * Mat4::scale(Vec3::new(p.radius, p.radius, p.radius));
-            let mesh = self.lod_mesh(pos.distance(eye), p.radius, v.focal);
-            self.draw_object(fb, &v, &mut st, mesh, &model, pos, p.radius, &p.material);
+            let lod = Self::lod_index(pos.distance(eye), p.radius, v.focal);
+            let mesh = self.planet_lods[i].as_ref().map_or(&self.spheres[lod], |l| &l[lod]);
+            self.draw_object(fb, &v, &mut st, mesh, &model, pos, scenario::max_radius(p), &p.material);
+
+            // Objetos de superficie: giran con el planeta porque cuelgan de su misma matriz. Solo de cerca.
+            if pos.distance(eye) < p.radius * PROPS_DISTANCIA {
+                let planeta = Mat4::translation(pos) * rot;
+                for x in &self.placements[i] {
+                    let model = planeta * x.local;
+                    let centro = model.transform_point3(Vec3::new(0.0, 0.5, 0.0));
+                    let mesh = &self.prop_meshes[self.prop_mesh_of[i][x.kind]];
+                    self.draw_object(fb, &v, &mut st, mesh, &model, centro, x.size, &Material::Flat { color: p.props[x.kind].color });
+                }
+            }
         }
 
         // Puntos de control (en carrera se ven los que faltan; el siguiente resalta)
@@ -411,12 +717,15 @@ impl Game {
             let pos = eye + f * 7.0 + up * 0.5;
             let model = Mat4::translation(pos) * Mat4::rotation_y(self.time * 0.9) * Mat4::rotation_x(0.35);
             let luz = Scene { light_pos: eye + right * 25.0 + up * 18.0 - f * 8.0, ..v.scene };
-            let vista = View { vp: v.vp, frustum: v.frustum, scene: luz, focal: v.focal };
+            let vista = View { vp: v.vp, frustum: v.frustum, scene: luz, focal: v.focal, eye: v.eye };
             self.draw_object(fb, &vista, &mut st, mesh, &model, pos, 1.2, &Material::Flat { color: COLOR_PROPIO });
             self.draw_menu(fb);
         } else {
-            let model = Mat4::translation(self.ship.position) * self.ship.rotation();
-            self.draw_object(fb, &v, &mut st, mesh, &model, self.ship.position, 1.2, &Material::Flat { color: COLOR_PROPIO });
+            // En primera persona la nave propia no se dibuja: no tapa la vista.
+            if self.view == ViewMode::ThirdPerson {
+                let model = Mat4::translation(self.ship.position) * self.ship.rotation();
+                self.draw_object(fb, &v, &mut st, mesh, &model, self.ship.position, 1.2, &Material::Flat { color: COLOR_PROPIO });
+            }
             self.draw_hud(fb, &v, &st);
         }
         st
@@ -449,10 +758,13 @@ impl Game {
             PLANETS.iter().map(|p| (p.name, scenario::planet_position(p, self.world_time), p.radius, 0xB0BEC5)),
         );
         for (name, pos, radius, color) in labels {
-            let dist = pos.distance(self.camera.eye);
+            let dist = pos.distance(v.eye);
             if let Some((x, y, depth)) = raster::project(&v.vp, pos, fb.width, fb.height) {
                 let r = (radius * v.focal / depth) as i32;
-                if dist < 1500.0 && x > 0.0 && x < w as f32 && y > 0.0 && y < h as f32 {
+                // Si el planeta llena media pantalla ya se sabe cuál es: el nombre solo estorbaría.
+                // Si otro cuerpo lo tapa, tampoco se muestra.
+                let en_pantalla = x > 0.0 && x < w as f32 && y > 0.0 && y < h as f32;
+                if dist < 1500.0 && r < h / 4 && en_pantalla && !tapado(fb, &v.vp, v.eye, pos, radius, x, y) {
                     hud::centered(fb, x as i32, (y as i32 - r - 2 * line).max(m), s, color, name);
                     hud::centered(fb, x as i32, (y as i32 - r - line).max(m + line), s, 0x78909C, &format!("{dist:.0} M"));
                 }
@@ -465,6 +777,26 @@ impl Game {
         hud::label(fb, m, m + 2 * line, s, 0x90A4AE, &format!("OBJETOS {}/{}", st.visible, st.total));
         let red = if self.online { format!("ONLINE {} JUGADORES", 1 + self.remotes.len()) } else { "SIN CONEXION".to_string() };
         hud::label(fb, m, m + 3 * line, s, if self.online { 0x66BB6A } else { 0xEF9A9A }, &red);
+        let vista = match self.view {
+            ViewMode::ThirdPerson => "3A PERSONA",
+            ViewMode::FirstPerson => "1A PERSONA",
+        };
+        let mut filas = vec![
+            (format!("GRAVEDAD {} (G)", if self.gravity_on { "SI" } else { "NO" }), 0x90A4AE),
+            (format!("VISTA {vista} (V)"), 0x90A4AE),
+            (format!("SEMILLA {} (R)", self.props_seed), 0x90A4AE),
+        ];
+        if let Some(o) = &self.orbit {
+            filas.push((format!("ORBITA {} (O SALIR)", body_name(o.body)), 0x66BB6A));
+        }
+        if let Some((texto, color, hasta)) = &self.notice {
+            if self.time < *hasta {
+                filas.push((texto.clone(), *color));
+            }
+        }
+        for (i, (texto, color)) in filas.iter().enumerate() {
+            hud::label(fb, m, m + (4 + i as i32) * line, s, *color, texto);
+        }
 
         // Carrera
         let cx = w / 2;
@@ -549,7 +881,7 @@ impl Game {
         // Selector de nave bajo la vista previa
         let nombre: String = self.models[self.selected].name.to_uppercase().chars().take(18).collect();
         hud::centered(fb, cx, h * 7 / 10, s * 2, blanco, &format!("< {nombre} >"));
-        let pista = format!("NAVE {}/{}   A D O TAB PARA CAMBIAR", self.selected + 1, self.models.len());
+        let pista = format!("NAVE {}/{}  A D TAB", self.selected + 1, self.models.len());
         hud::centered(fb, cx, h * 7 / 10 + 20 * si, s, 0x78909C, &pista);
 
         // Controles (izquierda)
@@ -561,6 +893,10 @@ impl Game {
             ("ENTER", "EMPEZAR CARRERA"),
             ("TAB", "CAMBIAR DE NAVE"),
             ("M", "VOLVER AL MENU"),
+            ("G", "GRAVEDAD SI O NO"),
+            ("O", "ORBITAR PLANETA"),
+            ("V", "PRIMERA PERSONA"),
+            ("R", "NUEVA SEMILLA"),
             ("F", "PANTALLA COMPLETA"),
         ];
         let col = 9;
@@ -659,6 +995,18 @@ impl Game {
     }
 }
 
+/// ¿Hay algo dibujado delante de la esfera (`pos`, `radius`) en el píxel (x, y)?
+/// Compara el z-buffer con la profundidad del punto de la esfera más cercano a la cámara.
+fn tapado(fb: &Framebuffer, vp: &Mat4, eye: Vec3, pos: Vec3, radius: f32, x: f32, y: f32) -> bool {
+    let frente = pos + (eye - pos).normalize() * radius;
+    let c = vp.transform_point(frente);
+    if c.w <= 1e-4 {
+        return false;
+    }
+    let idx = y as usize * fb.width + x as usize;
+    fb.depth.get(idx).is_some_and(|&d| d < c.z / c.w - 1e-4)
+}
+
 /// Cartel centrado arriba con un título y una pista de teclas.
 fn banner(fb: &mut Framebuffer, s: usize, titulo: &str, pista: &str) {
     let si = s as i32;
@@ -746,8 +1094,8 @@ mod tests {
     #[test]
     fn el_lod_usa_menos_triangulos_de_lejos() {
         let g = Game::new(1);
-        let (cerca, lejos) = (g.lod_mesh(40.0, 10.0, 400.0), g.lod_mesh(4000.0, 10.0, 400.0));
-        assert!(cerca.triangles.len() > lejos.triangles.len());
+        let (cerca, lejos) = (Game::lod_index(40.0, 10.0, 400.0), Game::lod_index(4000.0, 10.0, 400.0));
+        assert!(g.spheres[cerca].triangles.len() > g.spheres[lejos].triangles.len());
     }
 
     #[test]
@@ -966,6 +1314,234 @@ mod tests {
             let s = (h / 270).max(1) as i32;
             let lado = 2 * MINIMAPA_MITAD * s;
             assert!(lado * 4 < h as i32, "a {h}px de alto el minimapa mide {lado}px: debe ser menos de la cuarta parte");
+        }
+    }
+
+    // ---- física, órbita, vistas y objetos de superficie ----
+
+    const NADA: Input = Input {
+        forward: false, backward: false, yaw_left: false, yaw_right: false, pitch_up: false, pitch_down: false,
+        brake: false, cycle_model: false, start: false, menu: false, toggle_gravity: false, toggle_orbit: false,
+        toggle_view: false, reseed: false,
+    };
+
+    /// Coloca la nave en `pos`, quieta, con la cámara detrás.
+    fn poner(g: &mut Game, pos: Vec3) {
+        g.ship.reset(pos, 0.0, 0.0);
+        g.camera = ChaseCamera::new(&g.ship);
+    }
+
+    fn aqua(g: &Game) -> (Vec3, f32) {
+        let i = PLANETS.iter().position(|p| p.name == "AQUA").unwrap();
+        (scenario::planet_position(&PLANETS[i], g.world_time), PLANETS[i].radius)
+    }
+
+    #[test]
+    fn la_gravedad_atrae_hacia_el_sol() {
+        let mut g = jugando();
+        poner(&mut g, Vec3::new(0.0, 100.0, 0.0));
+        avanzar(&mut g, 1.0);
+        assert!(g.ship.velocity.y < -1.0, "debe caer hacia el sol: {:?}", g.ship.velocity);
+    }
+
+    #[test]
+    fn g_apaga_y_prende_la_gravedad() {
+        let mut g = jugando();
+        g.update(0.05, &Input { toggle_gravity: true, ..NADA });
+        assert!(!g.gravity_enabled());
+        poner(&mut g, Vec3::new(0.0, 100.0, 0.0));
+        avanzar(&mut g, 1.0);
+        assert!(g.ship.velocity.length() < 1e-3, "sin gravedad no se mueve");
+        g.update(0.05, &Input { toggle_gravity: true, ..NADA });
+        assert!(g.gravity_enabled());
+    }
+
+    #[test]
+    fn en_el_menu_no_hay_gravedad_ni_se_cambia_nada() {
+        let mut g = Game::new(1);
+        let pos = g.ship.position;
+        g.update(0.05, &Input { toggle_gravity: true, toggle_view: true, toggle_orbit: true, ..NADA });
+        avanzar(&mut g, 1.0);
+        assert!(g.ship.position.distance(pos) < 1e-3);
+        assert!(g.gravity_enabled() && g.view_mode() == ViewMode::ThirdPerson && g.orbiting().is_none());
+    }
+
+    #[test]
+    fn la_nave_no_atraviesa_el_sol_y_avisa_el_choque() {
+        let mut g = jugando();
+        poner(&mut g, Vec3::new(0.0, 60.0, 0.0));
+        g.ship.velocity = Vec3::new(0.0, -80.0, 0.0);
+        for _ in 0..40 {
+            g.update(0.05, &Input::default());
+            assert!(g.ship.position.length() >= SUN_RADIUS + NAVE_RADIO - 1e-3);
+        }
+        let choques = g.take_collisions();
+        assert!(choques.iter().any(|c| c.body == "SOL" && c.impact_speed > 10.0), "{choques:?}");
+        assert!(g.take_collisions().is_empty(), "se entregan una sola vez");
+    }
+
+    #[test]
+    fn chocar_con_un_planeta_respeta_su_relieve_y_quedarse_apoyado_no_repite_avisos() {
+        let mut g = jugando();
+        let (centro, radio) = aqua(&g);
+        poner(&mut g, centro + Vec3::new(0.0, radio * 1.6, 0.0));
+        g.ship.velocity = Vec3::new(0.0, -60.0, 0.0);
+        let i = 1 + PLANETS.iter().position(|p| p.name == "AQUA").unwrap();
+        for _ in 0..80 {
+            g.update(0.05, &Input::default());
+            let b = g.bodies()[i];
+            let superficie = g.surface_at(i, &b, g.ship.position);
+            assert!(g.ship.position.distance(b.center) >= superficie + NAVE_RADIO - 0.05);
+        }
+        let choques = g.take_collisions();
+        assert!(choques.iter().any(|c| c.body == "AQUA"));
+        assert!(choques.len() <= 4, "apoyada no debe avisar en cada cuadro: {}", choques.len());
+    }
+
+    #[test]
+    fn el_modo_orbita_sigue_al_planeta_a_altura_fija() {
+        let mut g = jugando();
+        g.update(0.05, &Input { toggle_gravity: true, ..NADA }); // la órbita no depende de la gravedad
+        let (centro, radio) = aqua(&g);
+        poner(&mut g, centro + Vec3::new(radio * 2.0, 0.0, 0.0));
+        g.update(0.05, &Input { toggle_orbit: true, ..NADA });
+        let cuerpo = g.orbiting().expect("cerca de AQUA debe entrar en órbita");
+        assert_eq!(body_name(cuerpo), "AQUA");
+
+        let distancia = |g: &Game| g.ship.position.distance(aqua(g).0);
+        let d0 = distancia(&g);
+        let inicio = aqua(&g).0;
+        avanzar(&mut g, 3.0);
+        assert!((distancia(&g) - d0).abs() < 0.5, "altura constante sin tocar controles");
+        assert!(aqua(&g).0.distance(inicio) > 10.0, "el planeta se movió y la nave lo siguió");
+
+        avanzar_con(&mut g, 1.0, Input { pitch_up: true, ..NADA });
+        assert!(distancia(&g) > d0 + 5.0, "flecha arriba sube la órbita");
+
+        g.update(0.05, &Input { toggle_orbit: true, ..NADA });
+        assert!(g.orbiting().is_none());
+        assert!(g.ship.velocity.length() > 1.0, "al salir conserva su velocidad");
+    }
+
+    fn avanzar_con(g: &mut Game, segundos: f32, i: Input) {
+        for _ in 0..(segundos / 0.05).ceil() as usize {
+            g.update(0.05, &i);
+        }
+    }
+
+    #[test]
+    fn en_orbita_el_planeta_queda_a_la_vista() {
+        let mut g = jugando();
+        let i = PLANETS.iter().position(|p| p.name == "GLACIA").unwrap();
+        let p = &PLANETS[i];
+        let c = scenario::planet_position(p, g.world_time);
+        poner(&mut g, c + Vec3::new(p.radius * 2.2, 0.0, 0.0));
+        g.update(0.05, &Input { toggle_orbit: true, ..NADA });
+        avanzar(&mut g, 2.0);
+        let (eye, target) = g.camera_pose();
+        let vp = Mat4::perspective(FOV_Y, 16.0 / 9.0, 0.5, 6000.0) * Mat4::look_at(eye, target, Vec3::Y);
+        let c = scenario::planet_position(p, g.world_time);
+        assert!(Frustum::from_view_proj(&vp).sphere_visible(c, p.radius));
+        assert!(Frustum::from_view_proj(&vp).sphere_visible(g.ship.position, NAVE_RADIO), "y la nave también");
+    }
+
+    #[test]
+    fn el_nombre_de_un_planeta_tapado_no_se_muestra() {
+        let eye = Vec3::new(0.0, 0.0, 10.0);
+        let vp = Mat4::perspective(1.0, 1.0, 0.5, 1000.0) * Mat4::look_at(eye, Vec3::ZERO, Vec3::Y);
+        let mut fb = Framebuffer::new(64, 64);
+        let lejos = Vec3::new(0.0, 0.0, -100.0);
+        assert!(!tapado(&fb, &vp, eye, lejos, 5.0, 32.0, 32.0), "sin nada delante se ve");
+        // Un objeto cercano dibujado en ese píxel (profundidad menor) lo tapa.
+        let cerca = vp.transform_point(Vec3::ZERO);
+        fb.depth[32 * 64 + 32] = cerca.z / cerca.w;
+        assert!(tapado(&fb, &vp, eye, lejos, 5.0, 32.0, 32.0));
+        // Su propia superficie no lo tapa a sí mismo.
+        let propia = vp.transform_point(Vec3::new(0.0, 0.0, -95.0));
+        fb.depth[32 * 64 + 32] = propia.z / propia.w;
+        assert!(!tapado(&fb, &vp, eye, lejos, 5.0, 32.0, 32.0));
+    }
+
+    #[test]
+    fn sin_nada_cerca_no_se_entra_en_orbita() {
+        let mut g = jugando();
+        poner(&mut g, Vec3::new(0.0, 3000.0, 0.0));
+        g.update(0.05, &Input { toggle_orbit: true, ..NADA });
+        assert!(g.orbiting().is_none());
+        assert!(g.notice.as_ref().is_some_and(|n| n.0.contains("NADA CERCA")));
+    }
+
+    #[test]
+    fn la_cuenta_regresiva_saca_de_la_orbita() {
+        let mut g = jugando();
+        let (centro, radio) = aqua(&g);
+        poner(&mut g, centro + Vec3::new(radio * 2.0, 0.0, 0.0));
+        g.update(0.05, &Input { toggle_orbit: true, ..NADA });
+        assert!(g.orbiting().is_some());
+        g.update(0.05, &empezar());
+        assert!(g.orbiting().is_none());
+    }
+
+    #[test]
+    fn v_alterna_la_vista_y_en_primera_persona_no_se_dibuja_la_nave_propia() {
+        let mut g = jugando();
+        poner(&mut g, Vec3::new(0.0, 900.0, 0.0)); // lejos de todo: solo cambia la nave propia
+        let tercera = g.render(&mut Framebuffer::new(160, 90));
+        g.update(0.0, &Input { toggle_view: true, ..NADA });
+        assert_eq!(g.view_mode(), ViewMode::FirstPerson);
+        let primera = g.render(&mut Framebuffer::new(160, 90));
+        assert_eq!(tercera.total, primera.total + 1);
+        g.update(0.0, &Input { toggle_view: true, ..NADA });
+        assert_eq!(g.view_mode(), ViewMode::ThirdPerson);
+    }
+
+    #[test]
+    fn la_camara_de_primera_persona_esta_en_la_nave_y_mira_al_frente() {
+        let mut g = jugando();
+        g.update(0.0, &Input { toggle_view: true, ..NADA });
+        let (eye, target) = g.camera_pose();
+        assert!(eye.distance(g.ship.position) < 0.5);
+        assert!((target - eye).normalize().dot(g.ship.forward()) > 0.999);
+    }
+
+    #[test]
+    fn r_cambia_la_semilla_y_reacomoda_los_objetos() {
+        let mut g = jugando();
+        let i = PLANETS.iter().position(|p| !p.props.is_empty()).unwrap();
+        let antes = g.placements[i][0].base;
+        let semilla = g.props_seed();
+        g.update(0.05, &Input { reseed: true, ..NADA });
+        assert_eq!(g.props_seed(), semilla + 1);
+        assert_ne!(g.placements[i][0].base, antes);
+    }
+
+    #[test]
+    fn los_objetos_de_superficie_se_dibujan_solo_de_cerca() {
+        let mut g = jugando();
+        let (centro, radio) = aqua(&g);
+        poner(&mut g, centro + Vec3::new(0.0, radio * 3.0, radio * 3.0));
+        let cerca = g.render(&mut Framebuffer::new(160, 90));
+        poner(&mut g, Vec3::new(0.0, 3000.0, 0.0));
+        let lejos = g.render(&mut Framebuffer::new(160, 90));
+        assert!(cerca.total > lejos.total + 50, "cerca {} / lejos {}", cerca.total, lejos.total);
+    }
+
+    #[test]
+    fn los_planetas_con_relieve_usan_su_propia_malla() {
+        let g = Game::new(1);
+        for (i, p) in PLANETS.iter().enumerate() {
+            assert_eq!(g.planet_lods[i].is_some(), p.relief > 0.0, "{}", p.name);
+        }
+    }
+
+    #[test]
+    fn sin_modelos_de_superficie_se_usa_el_cono_de_prueba() {
+        let g = Game::new(1);
+        for (i, p) in PLANETS.iter().enumerate() {
+            for (k, def) in p.props.iter().enumerate() {
+                let existe = assets::PROPS.iter().any(|(n, _)| *n == def.model);
+                assert_eq!(g.prop_mesh_of[i][k] == 0, !existe, "{}", def.model);
+            }
         }
     }
 }

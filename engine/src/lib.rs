@@ -10,7 +10,10 @@ pub mod hud;
 pub mod input;
 pub mod math;
 pub mod obj;
+pub mod orbit;
+pub mod physics;
 pub mod procedural;
+pub mod props;
 pub mod race;
 pub mod raster;
 pub mod remote;
@@ -18,6 +21,7 @@ pub mod rng;
 pub mod scenario;
 pub mod shaders;
 pub mod ship;
+pub mod terrain;
 
 pub use framebuffer::Framebuffer;
 pub use game::{Game, RenderStats, Screen};

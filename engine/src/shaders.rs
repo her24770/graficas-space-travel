@@ -98,6 +98,19 @@ pub fn fbm(p: Vec3, octaves: u32) -> f32 {
     sum / norm
 }
 
+/// Nivel del mar de los planetas rocosos: por debajo de este valor de ruido es agua.
+pub const SEA_LEVEL: f32 = 0.48;
+
+/// Ruido de altura de un planeta rocoso en la dirección `dir` (unitaria, espacio local).
+pub fn rocky_height(dir: Vec3, seed: f32) -> f32 {
+    fbm(dir * 3.0 + Vec3::new(seed, seed * 0.7, seed * 1.3), 5)
+}
+
+/// Ruido de altura de un planeta de hielo en la dirección `dir` (unitaria, espacio local).
+pub fn ice_height(dir: Vec3, seed: f32) -> f32 {
+    fbm(dir * 5.0 + Vec3::new(seed, 0.0, seed), 4)
+}
+
 /// Brillo de la atmósfera en el borde del planeta.
 fn rim(normal: Vec3, view: Vec3, lit: f32) -> f32 {
     (1.0 - normal.dot(view).max(0.0)).powi(3) * (0.25 + lit)
@@ -120,11 +133,11 @@ pub fn shade(m: &Material, f: &Fragment, s: &Scene) -> u32 {
             pack(rgb(0xFF4500).lerp(rgb(0xFFF2A8), heat) * (0.9 + 0.3 * heat))
         }
         Material::Rocky { sea, land, peak, seed } => {
-            let h = fbm(p * 3.0 + Vec3::new(seed, seed * 0.7, seed * 1.3), 5);
-            let ground = if h < 0.48 {
-                rgb(sea) * 0.6 + rgb(sea) * (0.4 * h / 0.48)
+            let h = rocky_height(p, seed);
+            let ground = if h < SEA_LEVEL {
+                rgb(sea) * 0.6 + rgb(sea) * (0.4 * h / SEA_LEVEL)
             } else {
-                let t = ((h - 0.48) / 0.52).clamp(0.0, 1.0);
+                let t = ((h - SEA_LEVEL) / (1.0 - SEA_LEVEL)).clamp(0.0, 1.0);
                 rgb(land).lerp(rgb(peak), t * t)
             };
             let polar = smoothstep(0.78, 0.9, p.y.abs() + (h - 0.5) * 0.15);
@@ -138,7 +151,7 @@ pub fn shade(m: &Material, f: &Fragment, s: &Scene) -> u32 {
             pack(c * (0.12 + 0.88 * lambert) + rgb(a) * (rim(n, view, lambert) * 0.5))
         }
         Material::Ice { a, b, seed } => {
-            let h = fbm(p * 5.0 + Vec3::new(seed, 0.0, seed), 4);
+            let h = ice_height(p, seed);
             let crack = 1.0 - smoothstep(0.0, 0.03, (h - 0.5).abs());
             let c = rgb(a).lerp(rgb(b), h) * (1.0 - 0.5 * crack);
             pack(c * (0.12 + 0.88 * lambert) + Vec3::new(0.6, 0.8, 1.0) * (rim(n, view, lambert) * 0.5))

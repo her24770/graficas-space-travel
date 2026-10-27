@@ -15,13 +15,17 @@ Notas:
 - Si un archivo está mal formado, se muestra un cubo y el título dice `(ERROR: ...)`. El CI también falla.
 - Mantén pocos triángulos (unos miles): el renderer corre en CPU. El HUD muestra el contador de triángulos.
 
+# Objetos sobre los planetas
+
+Árboles, rocas, cristales, edificios... van en `assets/props/`. Instrucciones en [props/README.md](props/README.md).
+
 # El escenario (planetas y circuito)
 
 Todo está en [`engine/src/scenario.rs`](../engine/src/scenario.rs) y es solo datos:
 
 | Qué | Dónde | Qué se puede cambiar |
 |---|---|---|
-| Planetas | `PLANETS` | nombre, radio, distancia al sol, período orbital, giro, inclinación y **material** |
+| Planetas | `PLANETS` | nombre, radio, distancia al sol, período orbital, giro, inclinación, **material**, gravedad, relieve y objetos de superficie |
 | Sol | `SUN_RADIUS` | tamaño (su aspecto es el material `Sun`) |
 | Circuito | `course()` y `GATE_COUNT` | posición de cada punto de control y su tamaño (`GATE_RADIUS`) |
 | Salida | `grid_slot()` | dónde se coloca cada jugador antes de largar |
