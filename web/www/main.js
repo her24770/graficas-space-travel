@@ -1,4 +1,6 @@
-import init, { App } from "./pkg/web.js";
+// __VERSION__ lo reemplaza el deploy por el commit: así cada versión pide archivos nuevos
+// y Cloudflare/el navegador no sirven un .js viejo junto a un .wasm nuevo (deben ser del mismo build).
+import init, { App } from "./pkg/web.js?v=__VERSION__";
 
 const canvas = document.getElementById("screen");
 const ctx = canvas.getContext("2d");
@@ -40,7 +42,7 @@ addEventListener("keyup", (e) => {
 addEventListener("blur", () => { presionadas = 0; });
 canvas.addEventListener("dblclick", pantallaCompleta);
 
-const wasm = await init();
+const wasm = await init({ module_or_path: "./pkg/web_bg.wasm?v=__VERSION__" });
 let [ancho, alto] = medidas();
 canvas.width = ancho;
 canvas.height = alto;

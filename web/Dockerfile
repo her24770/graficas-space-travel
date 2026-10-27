@@ -11,7 +11,8 @@ RUN VER=$(awk '/^name = "wasm-bindgen"$/{getline; gsub(/[" ]/,"",$3); print $3; 
 COPY . .
 RUN cargo build -p web --release --target wasm32-unknown-unknown \
     && wasm-bindgen --target web --out-dir /out/pkg target/wasm32-unknown-unknown/release/web.wasm \
-    && cp web/www/* /out/
+    && cp web/www/* /out/ \
+    && sed -i 's/__VERSION__/dev/g' /out/index.html /out/main.js
 
 FROM nginx:alpine
 COPY --from=build /out /usr/share/nginx/html

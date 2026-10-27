@@ -40,6 +40,9 @@ jobs:
           mkdir -p dist
           wasm-bindgen --target web --out-dir dist/pkg target/wasm32-unknown-unknown/release/web.wasm
           cp web/www/* dist/
+          # Versión en las URLs: evita que Cloudflare/el navegador mezclen archivos de builds distintos
+          sed -i "s/__VERSION__/${GITHUB_SHA::7}/g" dist/index.html dist/main.js
+          ! grep -rq __VERSION__ dist
           echo "${{ github.ref_name }} @ ${GITHUB_SHA::7} — $(date -u +'%Y-%m-%d %H:%M UTC')" > dist/version.txt
 
       - name: Construir la imagen del servidor
