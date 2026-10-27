@@ -192,7 +192,12 @@ mod tests {
     fn enter_estando_conectado_envia_la_orden_de_empezar() {
         let mut app = App::new(64, 36);
         app.net_message(&ServerMsg::Welcome { id: 1 }.encode());
-        app.set_input(engine::input::bits::START);
+        let enter = engine::input::bits::START;
+        app.set_input(enter);
+        app.frame(0.01); // el primer Enter solo sale del menú
+        app.set_input(0);
+        app.frame(0.01);
+        app.set_input(enter);
         app.frame(0.01);
         let mensajes: Vec<_> = std::iter::from_fn(|| Some(app.take_outgoing()).filter(|m| !m.is_empty())).collect();
         assert!(mensajes.iter().any(|m| decode_client(m) == Some(ClientMsg::StartRace)));

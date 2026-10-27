@@ -20,7 +20,7 @@ pub mod shaders;
 pub mod ship;
 
 pub use framebuffer::Framebuffer;
-pub use game::{Game, RenderStats};
+pub use game::{Game, RenderStats, Screen};
 pub use input::Input;
 pub use math::{Mat4, Vec3, Vec4};
 pub use obj::Mesh;

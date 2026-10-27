@@ -72,6 +72,27 @@ pub fn rect(fb: &mut Framebuffer, x: i32, y: i32, w: i32, h: i32, color: u32) {
     }
 }
 
+/// Rectángulo semitransparente (`alpha` de 0 a 255).
+pub fn shade_rect(fb: &mut Framebuffer, x: i32, y: i32, w: i32, h: i32, color: u32, alpha: u32) {
+    let mix = |a: u32, b: u32| (a * (255 - alpha) + b * alpha) / 255;
+    for yy in y.max(0)..(y + h).min(fb.height as i32) {
+        for xx in x.max(0)..(x + w).min(fb.width as i32) {
+            let p = &mut fb.pixels[yy as usize * fb.width + xx as usize];
+            let ch = |shift: u32| mix((*p >> shift) & 0xFF, (color >> shift) & 0xFF) << shift;
+            *p = ch(16) | ch(8) | ch(0);
+        }
+    }
+}
+
+/// Panel oscuro translúcido con borde, para que el texto se lea sobre la escena.
+pub fn panel(fb: &mut Framebuffer, x: i32, y: i32, w: i32, h: i32) {
+    shade_rect(fb, x, y, w, h, 0x05070D, 190);
+    rect(fb, x, y, w, 1, 0x37474F);
+    rect(fb, x, y + h - 1, w, 1, 0x37474F);
+    rect(fb, x, y, 1, h, 0x37474F);
+    rect(fb, x + w - 1, y, 1, h, 0x37474F);
+}
+
 /// Círculo relleno.
 pub fn dot(fb: &mut Framebuffer, cx: i32, cy: i32, r: i32, color: u32) {
     for y in -r..=r {
@@ -123,6 +144,17 @@ mod tests {
         assert!(fb.pixels.contains(&0xFFFFFF));
         text(&mut fb, -50, -50, 3, 0xFFFFFF, "FUERA"); // no debe paniquear
         text(&mut fb, 35, 15, 3, 0xFFFFFF, "BORDE");
+    }
+
+    #[test]
+    fn el_rectangulo_translucido_mezcla_con_lo_de_atras() {
+        let mut fb = Framebuffer::new(4, 4);
+        fb.clear(0xFFFFFF);
+        shade_rect(&mut fb, 0, 0, 2, 2, 0x000000, 128);
+        let mitad = fb.pixels[0] & 0xFF;
+        assert!((120..=135).contains(&mitad), "{mitad}");
+        assert_eq!(fb.pixels[3 * 4 + 3], 0xFFFFFF, "fuera del rectángulo no cambia");
+        shade_rect(&mut fb, -9, -9, 4, 4, 0, 255); // fuera de pantalla: no debe paniquear
     }
 
     #[test]

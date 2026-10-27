@@ -23,7 +23,16 @@ const COLORES_JUGADORES: [u32; 6] = [0x42A5F5, 0xEF5350, 0x66BB6A, 0xFFCA28, 0xA
 const COLOR_SIGUIENTE: u32 = 0xFFD54F;
 const COLOR_PUNTO: u32 = 0x42A5F5;
 /// Subdivisiones de la esfera, de menos a más detalle (LOD): 80, 320, 1280 y 5120 triángulos.
+/// Mitad del lado del minimapa, en unidades de HUD (se multiplica por la escala del texto).
+const MINIMAPA_MITAD: i32 = 32;
 const LOD_NIVELES: [u32; 4] = [1, 2, 3, 4];
+
+/// Pantalla en la que está el jugador: el menú de inicio o el juego.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Screen {
+    Menu,
+    Playing,
+}
 
 struct Model {
     name: String,
@@ -80,6 +89,8 @@ pub struct Game {
     finish_time: Option<f32>,
     slot: usize,
     start_request: bool,
+    screen: Screen,
+    prev_input: Input,
 }
 
 impl Game {
@@ -125,6 +136,8 @@ impl Game {
             finish_time: None,
             slot: 0,
             start_request: false,
+            screen: Screen::Menu,
+            prev_input: Input::default(),
         };
         game.place_on_grid();
         game
@@ -137,18 +150,40 @@ impl Game {
         self.camera = ChaseCamera::new(&self.ship);
     }
 
+    fn next_model(&mut self, delta: isize) {
+        let n = self.models.len() as isize;
+        self.selected = (self.selected as isize + delta).rem_euclid(n) as usize;
+    }
+
     pub fn update(&mut self, dt: f32, input: &Input) {
         let dt = dt.clamp(0.0, DT_MAX);
         self.time += dt;
         self.world_time += dt as f64;
-        if input.cycle_model {
-            self.selected = (self.selected + 1) % self.models.len();
-        }
-        if input.start {
-            if self.online {
-                self.start_request = true;
-            } else {
-                self.race.start_local();
+        let before = std::mem::replace(&mut self.prev_input, *input);
+        let pressed = |now: bool, was: bool| now && !was;
+
+        if self.screen == Screen::Menu {
+            if input.cycle_model || pressed(input.yaw_right, before.yaw_right) {
+                self.next_model(1);
+            }
+            if pressed(input.yaw_left, before.yaw_left) {
+                self.next_model(-1);
+            }
+            if input.start {
+                self.screen = Screen::Playing;
+            }
+        } else {
+            if input.cycle_model {
+                self.next_model(1);
+            }
+            if input.menu && matches!(self.race.phase, Phase::Lobby | Phase::Results) {
+                self.back_to_menu();
+            } else if input.start {
+                if self.online {
+                    self.start_request = true;
+                } else {
+                    self.race.start_local();
+                }
             }
         }
 
@@ -157,19 +192,42 @@ impl Game {
             if self.race.phase == Phase::Countdown {
                 self.progress = 0;
                 self.finish_time = None;
+                self.screen = Screen::Playing; // si alguien larga, nadie se queda en el menú
                 self.place_on_grid();
             }
             self.last_phase = self.race.phase;
         }
 
-        // En la cuenta regresiva la nave espera en la parrilla.
-        let ctrl = if self.race.phase == Phase::Countdown { Input::default() } else { *input };
+        // En el menú y en la cuenta regresiva la nave espera quieta en la parrilla.
+        let quieta = self.screen == Screen::Menu || self.race.phase == Phase::Countdown;
+        let ctrl = if quieta { Input::default() } else { *input };
         self.ship.update(&ctrl, dt);
         self.camera.update(&self.ship, dt);
         self.check_gates();
         for r in &mut self.remotes {
             r.update(dt);
         }
+    }
+
+    fn back_to_menu(&mut self) {
+        self.screen = Screen::Menu;
+        if !self.online {
+            self.race.reset();
+            self.last_phase = Phase::Lobby;
+            self.progress = 0;
+            self.finish_time = None;
+        }
+        self.place_on_grid();
+    }
+
+    pub fn screen(&self) -> Screen {
+        self.screen
+    }
+
+    /// Cámara del menú: gira despacio alrededor del sol mostrando el sistema.
+    fn menu_camera(&self) -> (Vec3, Vec3) {
+        let a = (self.world_time * 0.08) as f32;
+        (Vec3::new(a.cos() * 230.0, 70.0 + 25.0 * (a * 0.7).sin(), a.sin() * 230.0), Vec3::ZERO)
     }
 
     fn check_gates(&mut self) {
@@ -233,7 +291,13 @@ impl Game {
 
     /// Casilla de salida de este jugador (según su orden entre los conectados).
     pub fn set_slot(&mut self, slot: usize) {
-        self.slot = slot;
+        if slot != self.slot {
+            self.slot = slot;
+            // En el menú la nave está estacionada: que se vea en su casilla y no encima de las demás.
+            if self.screen == Screen::Menu {
+                self.place_on_grid();
+            }
+        }
     }
 
     /// Ajusta el reloj del mundo al del servidor para que todos vean los planetas en el mismo lugar.
@@ -285,7 +349,9 @@ impl Game {
         fb.clear(FONDO);
         let aspect = fb.width as f32 / fb.height as f32;
         let proj = Mat4::perspective(FOV_Y, aspect, 0.5, 6000.0);
-        let view = self.camera.view();
+        let menu = self.screen == Screen::Menu;
+        let (eye, target) = if menu { self.menu_camera() } else { (self.camera.eye, self.camera.target) };
+        let view = Mat4::look_at(eye, target, Vec3::Y);
 
         // Estrellas: solo rotan con la cámara, no se acercan al moverte.
         let sky = proj * view.without_translation();
@@ -298,10 +364,9 @@ impl Game {
         let v = View {
             vp,
             frustum: &frustum,
-            scene: Scene { time: self.time, light_pos: Vec3::ZERO, eye: self.camera.eye },
+            scene: Scene { time: self.time, light_pos: Vec3::ZERO, eye },
             focal: fb.height as f32 * 0.5 / (FOV_Y * 0.5).tan(),
         };
-        let eye = self.camera.eye;
         let mut st = RenderStats::default();
         let t = self.world_time;
 
@@ -338,11 +403,22 @@ impl Game {
             let color = COLORES_JUGADORES[s.id as usize % COLORES_JUGADORES.len()];
             self.draw_object(fb, &v, &mut st, mesh, &model, s.position, 1.2, &Material::Flat { color });
         }
-        let model = Mat4::translation(self.ship.position) * self.ship.rotation();
         let mesh = &self.models[self.selected].mesh;
-        self.draw_object(fb, &v, &mut st, mesh, &model, self.ship.position, 1.2, &Material::Flat { color: COLOR_PROPIO });
-
-        self.draw_hud(fb, &v, &st);
+        if menu {
+            // Vista previa: la nave gira frente a la cámara, con una luz propia desde un costado.
+            let f = (target - eye).normalize();
+            let (right, up) = (f.cross(Vec3::Y).normalize(), f.cross(Vec3::Y).normalize().cross(f));
+            let pos = eye + f * 7.0 + up * 0.5;
+            let model = Mat4::translation(pos) * Mat4::rotation_y(self.time * 0.9) * Mat4::rotation_x(0.35);
+            let luz = Scene { light_pos: eye + right * 25.0 + up * 18.0 - f * 8.0, ..v.scene };
+            let vista = View { vp: v.vp, frustum: v.frustum, scene: luz, focal: v.focal };
+            self.draw_object(fb, &vista, &mut st, mesh, &model, pos, 1.2, &Material::Flat { color: COLOR_PROPIO });
+            self.draw_menu(fb);
+        } else {
+            let model = Mat4::translation(self.ship.position) * self.ship.rotation();
+            self.draw_object(fb, &v, &mut st, mesh, &model, self.ship.position, 1.2, &Material::Flat { color: COLOR_PROPIO });
+            self.draw_hud(fb, &v, &st);
+        }
         st
     }
 
@@ -393,10 +469,7 @@ impl Game {
         // Carrera
         let cx = w / 2;
         match self.race.phase {
-            Phase::Lobby => {
-                hud::centered(fb, cx, m, s * 2, COLOR_SIGUIENTE, "ENTER = EMPEZAR CARRERA");
-                hud::centered(fb, cx, m + 2 * line + 4 * s as i32, s, 0xB0BEC5, "PUEDES PRACTICAR LIBREMENTE");
-            }
+            Phase::Lobby => banner(fb, s, "SALA DE ESPERA", "ENTER EMPEZAR CARRERA   M MENU"),
             Phase::Countdown => {
                 let n = self.race.countdown_number().unwrap_or(1).to_string();
                 hud::centered(fb, cx, h / 3, s * 10, COLOR_SIGUIENTE, &n);
@@ -408,12 +481,9 @@ impl Game {
                     Some(_) => "TERMINASTE! ESPERANDO A LOS DEMAS".to_string(),
                     None => format!("PUNTO {}/{}", self.progress + 1, GATE_COUNT),
                 };
-                hud::centered(fb, cx, m + 2 * line + 4 * s as i32, s, COLOR_SIGUIENTE, &estado);
+                hud::centered(fb, cx, m + 2 * line + 4 * s as i32, s, white, &estado);
             }
-            Phase::Results => {
-                hud::centered(fb, cx, m, s * 2, COLOR_SIGUIENTE, "CARRERA TERMINADA");
-                hud::centered(fb, cx, m + 2 * line + 4 * s as i32, s, white, "ENTER = REVANCHA");
-            }
+            Phase::Results => banner(fb, s, "CARRERA TERMINADA", "ENTER REVANCHA   M MENU"),
         }
 
         // Marcador del siguiente punto de control (en pantalla o en el borde)
@@ -449,26 +519,100 @@ impl Game {
         // Posiciones
         let entries = self.entries();
         let base = h - m - line * (entries.len() as i32 + 1);
-        hud::label(fb, m, base - line, s, 0x90A4AE, "POSICIONES");
+        let en_sala = self.race.phase == Phase::Lobby;
+        hud::label(fb, m, base - line, s, 0x90A4AE, if en_sala { "EN LA SALA" } else { "POSICIONES" });
         for (i, e) in entries.iter().enumerate() {
-            let estado = if e.finish_ms > 0 { fmt_time(e.finish_ms as f32 / 1000.0) } else { format!("{}/{}", e.progress, GATE_COUNT) };
-            hud::label(fb, m, base + i as i32 * line, s, e.color, &format!("{} {} {}", i + 1, e.label, estado));
+            let texto = if en_sala {
+                e.label.clone()
+            } else {
+                let estado = if e.finish_ms > 0 { fmt_time(e.finish_ms as f32 / 1000.0) } else { format!("{}/{}", e.progress, GATE_COUNT) };
+                format!("{} {} {}", i + 1, e.label, estado)
+            };
+            hud::label(fb, m, base + i as i32 * line, s, e.color, &texto);
         }
 
         self.draw_minimap(fb, s as i32, m);
+    }
 
-        // Controles
-        let ayuda = "W/S ACELERAR  A/D GIRAR  FLECHAS INCLINAR  ESPACIO FRENO  TAB NAVE  F PANTALLA";
-        hud::centered(fb, cx, h - m - 8 * s as i32, s, 0x78909C, ayuda);
+    /// Pantalla de inicio: título, vista previa de la nave, controles y estado de la sala.
+    fn draw_menu(&self, fb: &mut Framebuffer) {
+        let s = (fb.height / 270).max(1);
+        let si = s as i32;
+        let (m, pad, line) = (6 * si, 6 * si, 10 * si);
+        let (w, h) = (fb.width as i32, fb.height as i32);
+        let cx = w / 2;
+        let (oro, gris, blanco) = (COLOR_SIGUIENTE, 0x90A4AE, 0xFFFFFF);
+
+        hud::centered(fb, cx, h / 14, s * 4, oro, "SPACE TRAVEL");
+        hud::centered(fb, cx, h / 14 + 40 * si, s, 0xB0BEC5, "CARRERA POR EL SISTEMA SOLAR");
+
+        // Selector de nave bajo la vista previa
+        let nombre: String = self.models[self.selected].name.to_uppercase().chars().take(18).collect();
+        hud::centered(fb, cx, h * 7 / 10, s * 2, blanco, &format!("< {nombre} >"));
+        let pista = format!("NAVE {}/{}   A D O TAB PARA CAMBIAR", self.selected + 1, self.models.len());
+        hud::centered(fb, cx, h * 7 / 10 + 20 * si, s, 0x78909C, &pista);
+
+        // Controles (izquierda)
+        let controles = [
+            ("W S", "ACELERAR Y REVERSA"),
+            ("A D", "GIRAR"),
+            ("FLECHAS", "INCLINAR LA NARIZ"),
+            ("ESPACIO", "FRENAR"),
+            ("ENTER", "EMPEZAR CARRERA"),
+            ("TAB", "CAMBIAR DE NAVE"),
+            ("M", "VOLVER AL MENU"),
+            ("F", "PANTALLA COMPLETA"),
+        ];
+        let col = 9;
+        let cols = controles.iter().map(|(_, a)| col + a.len()).max().unwrap_or(col);
+        let (pw, ph) = (cols as i32 * 6 * si + 2 * pad, (controles.len() as i32 + 1) * line + 2 * pad);
+        let py = h * 3 / 10;
+        hud::panel(fb, m, py, pw, ph);
+        hud::label(fb, m + pad, py + pad, s, gris, "CONTROLES");
+        for (i, (tecla, accion)) in controles.iter().enumerate() {
+            let y = py + pad + (i as i32 + 1) * line;
+            hud::label(fb, m + pad, y, s, oro, tecla);
+            hud::label(fb, m + pad + col as i32 * 6 * si, y, s, blanco, accion);
+        }
+
+        // Sala (derecha)
+        let mut filas: Vec<(String, u32)> = Vec::new();
+        if self.online {
+            filas.push(("ONLINE".into(), 0x66BB6A));
+            filas.push((format!("{} JUGADORES", 1 + self.remotes.len()), blanco));
+            filas.push(("TU".into(), blanco));
+            for r in &self.remotes {
+                filas.push((format!("J{}", r.shown.id), COLORES_JUGADORES[r.shown.id as usize % COLORES_JUGADORES.len()]));
+            }
+        } else {
+            filas.push(("SIN CONEXION".into(), 0xEF9A9A));
+            filas.push(("JUEGAS SOLO".into(), blanco));
+        }
+        let pie = ["CUALQUIERA PUEDE", "EMPEZAR LA CARRERA"];
+        let ancho = filas.iter().map(|(t, _)| t.len()).chain(pie.iter().map(|t| t.len())).max().unwrap_or(10).max(14);
+        let pw2 = ancho as i32 * 6 * si + 2 * pad;
+        let ph2 = (filas.len() as i32 + pie.len() as i32 + 3) * line + 2 * pad;
+        let px2 = w - m - pw2;
+        hud::panel(fb, px2, py, pw2, ph2);
+        hud::label(fb, px2 + pad, py + pad, s, gris, "SALA");
+        for (i, (texto, color)) in filas.iter().enumerate() {
+            hud::label(fb, px2 + pad, py + pad + (i as i32 + 1) * line, s, *color, texto);
+        }
+        for (i, t) in pie.iter().enumerate() {
+            hud::label(fb, px2 + pad, py + pad + (filas.len() as i32 + 2 + i as i32) * line, s, 0x78909C, t);
+        }
+
+        // Invitación a jugar
+        let color = if (self.time * 2.0) as i32 % 2 == 0 { oro } else { 0xFFF59D };
+        hud::centered(fb, cx, h - m - 30 * si, s * 3, color, "ENTER = JUGAR");
     }
 
     /// Mapa visto desde arriba: sol, órbitas, planetas, circuito y jugadores.
     fn draw_minimap(&self, fb: &mut Framebuffer, s: i32, m: i32) {
         const ALCANCE: f32 = 580.0;
-        let size = 70 * s;
+        let size = MINIMAPA_MITAD * s;
         let (cx, cy) = (fb.width as i32 - m - size, m + size);
-        hud::rect(fb, cx - size - 1, cy - size - 1, 2 * size + 2, 2 * size + 2, 0x37474F);
-        hud::rect(fb, cx - size, cy - size, 2 * size, 2 * size, 0x05070D);
+        hud::panel(fb, cx - size - 1, cy - size - 1, 2 * size + 2, 2 * size + 2);
         let to_map = |p: Vec3| (cx + (p.x / ALCANCE * size as f32) as i32, cy + (p.z / ALCANCE * size as f32) as i32);
         let en_mapa = |x: i32, y: i32| (x - cx).abs() < size && (y - cy).abs() < size;
 
@@ -489,7 +633,7 @@ impl Game {
         let racing = self.race.phase == Phase::Racing;
         for (i, g) in self.course.iter().enumerate() {
             let (x, y) = to_map(g.pos);
-            let (color, r) = if racing && i == self.progress { (COLOR_SIGUIENTE, s + 1) } else if i < self.progress && racing { (0x2E7D32, s) } else { (COLOR_PUNTO, s) };
+            let (color, r) = if racing && i == self.progress { (COLOR_SIGUIENTE, s) } else if i < self.progress && racing { (0x2E7D32, 1) } else { (COLOR_PUNTO, 1) };
             hud::rect(fb, x - r, y - r, 2 * r + 1, 2 * r + 1, color);
         }
         for r in &self.remotes {
@@ -515,6 +659,17 @@ impl Game {
     }
 }
 
+/// Cartel centrado arriba con un título y una pista de teclas.
+fn banner(fb: &mut Framebuffer, s: usize, titulo: &str, pista: &str) {
+    let si = s as i32;
+    let pad = 6 * si;
+    let w = hud::width(titulo, s * 2).max(hud::width(pista, s)) + 2 * pad;
+    let (x, y) = (fb.width as i32 / 2 - w / 2, 6 * si);
+    hud::panel(fb, x, y, w, 25 * si + 2 * pad);
+    hud::centered(fb, fb.width as i32 / 2, y + pad, s * 2, COLOR_SIGUIENTE, titulo);
+    hud::centered(fb, fb.width as i32 / 2, y + pad + 18 * si, s, 0xFFFFFF, pista);
+}
+
 fn fmt_time(secs: f32) -> String {
     let cs = (secs * 100.0) as u32;
     format!("{}:{:02}.{:02}", cs / 6000, cs / 100 % 60, cs % 100)
@@ -536,6 +691,13 @@ mod tests {
 
     fn empezar() -> Input {
         Input { start: true, ..Default::default() }
+    }
+
+    /// Un juego que ya salió del menú.
+    fn jugando() -> Game {
+        let mut g = Game::new(1);
+        g.update(0.05, &empezar());
+        g
     }
 
     #[test]
@@ -573,7 +735,7 @@ mod tests {
 
     #[test]
     fn el_frustum_culling_descarta_lo_que_queda_fuera() {
-        let mut g = Game::new(1);
+        let mut g = jugando();
         // Mirando hacia afuera del sistema solo se ve una parte de los objetos.
         g.ship.reset(Vec3::new(900.0, 0.0, 0.0), -PI / 2.0, 0.0);
         g.camera = ChaseCamera::new(&g.ship);
@@ -601,7 +763,7 @@ mod tests {
 
     #[test]
     fn un_rival_a_la_vista_cambia_la_imagen() {
-        let mut g = Game::new(1);
+        let mut g = jugando();
         let (mut sin, mut con) = (Framebuffer::new(320, 240), Framebuffer::new(320, 240));
         g.render(&mut sin);
         let adelante = g.ship.position + g.ship.forward() * 12.0;
@@ -612,7 +774,7 @@ mod tests {
 
     #[test]
     fn el_estado_local_refleja_la_nave() {
-        let mut g = Game::new(1);
+        let mut g = jugando();
         let antes = g.local_state().position;
         g.update(0.05, &Input { forward: true, ..Default::default() });
         assert_ne!(g.local_state().position, antes);
@@ -620,7 +782,7 @@ mod tests {
 
     #[test]
     fn una_carrera_completa_sin_servidor() {
-        let mut g = Game::new(1);
+        let mut g = jugando();
         g.update(0.05, &empezar());
         assert_eq!(g.phase(), Phase::Countdown);
         avanzar(&mut g, 3.2);
@@ -638,7 +800,7 @@ mod tests {
 
     #[test]
     fn los_puntos_se_cruzan_en_orden() {
-        let mut g = Game::new(1);
+        let mut g = jugando();
         g.update(0.05, &empezar());
         avanzar(&mut g, 3.2);
         g.ship.position = g.course[3].pos; // saltarse puntos no cuenta
@@ -648,7 +810,7 @@ mod tests {
 
     #[test]
     fn en_la_cuenta_regresiva_la_nave_no_se_mueve() {
-        let mut g = Game::new(1);
+        let mut g = jugando();
         g.update(0.05, &empezar());
         let pos = g.ship.position;
         for _ in 0..20 {
@@ -673,7 +835,7 @@ mod tests {
 
     #[test]
     fn online_pedir_empezar_no_arranca_solo_avisa() {
-        let mut g = Game::new(1);
+        let mut g = jugando();
         g.set_online(true);
         g.update(0.05, &empezar());
         assert_eq!(g.phase(), Phase::Lobby);
@@ -711,8 +873,99 @@ mod tests {
     #[test]
     fn el_hud_se_dibuja_en_cualquier_resolucion_sin_paniquear() {
         let g = Game::new(1);
+        let en_juego = jugando();
         for (w, h) in [(160, 90), (800, 600), (1920, 1080), (100, 1000)] {
-            g.render(&mut Framebuffer::new(w, h));
+            g.render(&mut Framebuffer::new(w, h)); // menú
+            en_juego.render(&mut Framebuffer::new(w, h));
+        }
+    }
+
+    #[test]
+    fn empieza_en_el_menu_y_la_nave_no_se_mueve() {
+        let mut g = Game::new(1);
+        assert_eq!(g.screen(), Screen::Menu);
+        let pos = g.ship.position;
+        for _ in 0..20 {
+            g.update(0.05, &Input { forward: true, yaw_left: true, ..Default::default() });
+        }
+        assert!(g.ship.position.distance(pos) < 1e-3);
+        assert_eq!(g.screen(), Screen::Menu);
+    }
+
+    #[test]
+    fn enter_en_el_menu_entra_al_juego_sin_empezar_la_carrera() {
+        let mut g = Game::new(1);
+        g.update(0.05, &empezar());
+        assert_eq!((g.screen(), g.phase()), (Screen::Playing, Phase::Lobby));
+        g.update(0.05, &empezar());
+        assert_eq!(g.phase(), Phase::Countdown, "el segundo Enter sí larga");
+    }
+
+    #[test]
+    fn m_vuelve_al_menu_en_la_sala_pero_no_en_plena_carrera() {
+        let m = Input { menu: true, ..Default::default() };
+        let mut g = jugando();
+        g.update(0.05, &m);
+        assert_eq!(g.screen(), Screen::Menu);
+
+        let mut g = jugando();
+        g.update(0.05, &empezar());
+        avanzar(&mut g, 3.2);
+        assert_eq!(g.phase(), Phase::Racing);
+        g.update(0.05, &m);
+        assert_eq!(g.screen(), Screen::Playing, "en carrera no se puede salir");
+    }
+
+    #[test]
+    fn volver_al_menu_despues_de_una_carrera_la_reinicia() {
+        let mut g = jugando();
+        g.update(0.05, &empezar());
+        avanzar(&mut g, 3.2);
+        for i in 0..GATE_COUNT {
+            g.ship.position = g.course[i].pos;
+            g.update(0.05, &Input::default());
+        }
+        assert_eq!(g.phase(), Phase::Results);
+        g.update(0.05, &Input { menu: true, ..Default::default() });
+        assert_eq!((g.screen(), g.phase(), g.progress()), (Screen::Menu, Phase::Lobby, 0));
+    }
+
+    #[test]
+    fn en_el_menu_a_d_cambian_de_nave_una_vez_por_pulsacion() {
+        let mut g = Game::new(1);
+        let (n, inicio) = (g.models.len(), g.selected);
+        let der = Input { yaw_right: true, ..Default::default() };
+        for _ in 0..5 {
+            g.update(0.05, &der); // tecla mantenida: cuenta una sola vez
+        }
+        assert_eq!(g.selected, (inicio + 1) % n);
+        g.update(0.05, &Input::default());
+        g.update(0.05, &Input { yaw_left: true, ..Default::default() });
+        assert_eq!(g.selected, inicio);
+    }
+
+    #[test]
+    fn si_el_servidor_larga_el_que_esta_en_el_menu_entra_a_la_carrera() {
+        let mut g = Game::new(1);
+        g.set_online(true);
+        g.set_race_server(1, 0);
+        g.update(0.01, &Input::default());
+        assert_eq!((g.screen(), g.phase()), (Screen::Playing, Phase::Countdown));
+    }
+
+    #[test]
+    fn en_el_menu_cada_jugador_espera_en_su_casilla() {
+        let mut g = Game::new(1);
+        g.set_slot(3);
+        assert!(g.ship.position.distance(scenario::grid_slot(3).0) < 1.0);
+    }
+
+    #[test]
+    fn el_minimapa_ocupa_poco_de_la_pantalla() {
+        for h in [270usize, 540, 1080] {
+            let s = (h / 270).max(1) as i32;
+            let lado = 2 * MINIMAPA_MITAD * s;
+            assert!(lado * 4 < h as i32, "a {h}px de alto el minimapa mide {lado}px: debe ser menos de la cuarta parte");
         }
     }
 }
