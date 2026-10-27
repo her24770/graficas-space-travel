@@ -103,6 +103,37 @@ impl Mesh {
         }
     }
 
+    /// Recalcula una normal suave por vértice promediando las caras que lo tocan.
+    pub fn recompute_normals(&mut self) {
+        let mut n = vec![Vec3::ZERO; self.vertices.len()];
+        for t in &self.triangles {
+            let [a, b, c] = [t[0] as usize, t[1] as usize, t[2] as usize];
+            let face = (self.vertices[b] - self.vertices[a]).cross(self.vertices[c] - self.vertices[a]);
+            for i in [a, b, c] {
+                n[i] += face;
+            }
+        }
+        self.normals = n.into_iter().map(Vec3::normalize).collect();
+    }
+
+    /// Copia "parada en el suelo": centrada en X y Z, con la base en y = 0 y altura 1.
+    /// Así un objeto de superficie se apoya sobre el planeta sin flotar ni hundirse.
+    pub fn grounded(&self) -> Mesh {
+        let mut min = self.vertices[0];
+        let mut max = self.vertices[0];
+        for v in &self.vertices {
+            min = Vec3::new(min.x.min(v.x), min.y.min(v.y), min.z.min(v.z));
+            max = Vec3::new(max.x.max(v.x), max.y.max(v.y), max.z.max(v.z));
+        }
+        let alto = (max.y - min.y).max(1e-6);
+        let base = Vec3::new((min.x + max.x) * 0.5, min.y, (min.z + max.z) * 0.5);
+        Mesh {
+            vertices: self.vertices.iter().map(|v| (*v - base) * (1.0 / alto)).collect(),
+            triangles: self.triangles.clone(),
+            normals: self.normals.clone(),
+        }
+    }
+
     /// Copia centrada en su caja envolvente y escalada a radio 1.
     /// Así cualquier modelo se ve bien sin importar cómo se exportó.
     pub fn normalized(&self) -> Mesh {
@@ -160,6 +191,21 @@ mod tests {
     #[test]
     fn rechaza_modelo_sin_caras() {
         assert_eq!(parse(b"v 0 0 0\n").unwrap_err(), ObjError::SinTriangulos);
+    }
+
+    #[test]
+    fn grounded_apoya_la_base_en_cero_con_altura_uno() {
+        let m = parse(b"v 5 2 5\nv 7 2 5\nv 6 6 5\nf 1 2 3\n").unwrap().grounded();
+        let (min_y, max_y) = m.vertices.iter().fold((f32::MAX, f32::MIN), |(a, b), v| (a.min(v.y), b.max(v.y)));
+        assert!(min_y.abs() < 1e-6 && (max_y - 1.0).abs() < 1e-6);
+        assert!(m.vertices.iter().map(|v| v.x).sum::<f32>().abs() < 1e-5, "centrado en X");
+    }
+
+    #[test]
+    fn recompute_normals_da_normales_unitarias_hacia_afuera() {
+        let mut m = Mesh::cube();
+        m.recompute_normals();
+        assert!(m.normals.iter().zip(&m.vertices).all(|(n, v)| (n.length() - 1.0).abs() < 1e-5 && n.dot(*v) > 0.0));
     }
 
     #[test]

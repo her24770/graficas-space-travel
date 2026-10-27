@@ -56,8 +56,16 @@ fn main() {
         if window.is_key_pressed(Key::Enter, KeyRepeat::No) {
             b |= bits::START;
         }
-        if window.is_key_pressed(Key::M, KeyRepeat::No) {
-            b |= bits::MENU;
+        for (tecla, bit) in [
+            (Key::M, bits::MENU),
+            (Key::G, bits::GRAVITY),
+            (Key::O, bits::ORBIT),
+            (Key::V, bits::VIEW),
+            (Key::R, bits::RESEED),
+        ] {
+            if window.is_key_pressed(tecla, KeyRepeat::No) {
+                b |= bit;
+            }
         }
 
         game.update(dt, &Input::from_bits(b));

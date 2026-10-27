@@ -23,6 +23,11 @@ impl ChaseCamera {
 
     pub fn update(&mut self, ship: &Ship, dt: f32) {
         let (eye, target) = Self::deseado(ship);
+        self.follow(eye, target, dt);
+    }
+
+    /// Se acerca suavemente a un punto de vista cualquiera (lo usa el modo órbita).
+    pub fn follow(&mut self, eye: Vec3, target: Vec3, dt: f32) {
         let k = 1.0 - (-SEGUIMIENTO * dt).exp();
         self.eye = self.eye + (eye - self.eye) * k;
         self.target = self.target + (target - self.target) * k;

@@ -44,6 +44,34 @@ pub fn icosphere(subdivisions: u32) -> Mesh {
     Mesh { normals: vertices.clone(), vertices, triangles }
 }
 
+/// Esfera de radio variable: cada vértice se mueve hacia afuera según `radius(dir)`.
+/// Así el relieve es geometría real (la silueta del planeta deja de ser un círculo perfecto).
+pub fn displaced_sphere(subdivisions: u32, radius: impl Fn(Vec3) -> f32) -> Mesh {
+    let mut m = icosphere(subdivisions);
+    for v in &mut m.vertices {
+        *v = *v * radius(*v);
+    }
+    m.recompute_normals();
+    m
+}
+
+/// Cono con la base en y = 0 y la punta en y = 1. Es la forma de prueba de los objetos de superficie
+/// mientras no exista su modelo en `assets/props/`.
+pub fn cone(segments: u32) -> Mesh {
+    let mut vertices = vec![Vec3::new(0.0, 1.0, 0.0), Vec3::ZERO];
+    for i in 0..segments {
+        let a = 2.0 * PI * i as f32 / segments as f32;
+        vertices.push(Vec3::new(0.35 * a.cos(), 0.0, 0.35 * a.sin()));
+    }
+    let mut triangles = Vec::new();
+    for i in 0..segments {
+        let (a, b) = (2 + i, 2 + (i + 1) % segments);
+        triangles.push([0, b, a]); // costado
+        triangles.push([1, a, b]); // base
+    }
+    Mesh { vertices, triangles, normals: Vec::new() }
+}
+
 /// Anillo en el plano XY (se cruza volando a lo largo de Z). `major` = radio del anillo, `minor` = grosor.
 pub fn torus(major: f32, minor: f32, segments: u32, sides: u32) -> Mesh {
     let mut vertices = Vec::new();
@@ -106,6 +134,26 @@ mod tests {
             let (c, n) = centroide_y_normal(&m, t);
             let en_el_anillo = Vec3::new(c.x, c.y, 0.0).normalize() * 10.0;
             n.dot(c - en_el_anillo) > 0.0
+        }));
+    }
+
+    #[test]
+    fn la_esfera_deformada_respeta_el_radio_pedido() {
+        let m = displaced_sphere(2, |d| 1.0 + 0.1 * d.y);
+        assert!(m.vertices.iter().all(|v| (v.length() - (1.0 + 0.1 * v.normalize().y)).abs() < 1e-4));
+        assert!(m.triangles.iter().all(|t| {
+            let (c, n) = centroide_y_normal(&m, t);
+            n.dot(c) > 0.0
+        }));
+    }
+
+    #[test]
+    fn las_caras_del_cono_miran_hacia_afuera() {
+        let m = cone(8);
+        let centro = Vec3::new(0.0, 0.3, 0.0);
+        assert!(m.triangles.iter().all(|t| {
+            let (c, n) = centroide_y_normal(&m, t);
+            n.dot(c - centro) > 0.0
         }));
     }
 

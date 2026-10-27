@@ -1,13 +1,10 @@
-//! Descubre los .obj de `assets/models/` y los incrusta en el binario.
-//! Para agregar un modelo basta con soltar el archivo en esa carpeta.
+//! Descubre los .obj de `assets/models/` (naves) y `assets/props/` (objetos de superficie)
+//! y los incrusta en el binario. Para agregar un modelo basta con soltar el archivo en la carpeta.
 use std::{env, fs, path::Path};
 
-fn main() {
-    let manifest = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let dir = Path::new(&manifest).join("../assets/models");
+fn lista(dir: &Path, constante: &str) -> String {
     println!("cargo:rerun-if-changed={}", dir.display());
-
-    let mut names: Vec<String> = fs::read_dir(&dir)
+    let mut names: Vec<String> = fs::read_dir(dir)
         .map(|rd| {
             rd.filter_map(|e| e.ok())
                 .map(|e| e.path())
@@ -18,11 +15,18 @@ fn main() {
         .unwrap_or_default();
     names.sort();
 
-    let mut out = String::from("pub const MODELS: &[(&str, &[u8])] = &[\n");
+    let mut out = format!("pub const {constante}: &[(&str, &[u8])] = &[\n");
     for n in &names {
         let abs = dir.join(format!("{n}.obj"));
         out.push_str(&format!("    ({n:?}, include_bytes!({:?})),\n", abs.to_string_lossy()));
     }
     out.push_str("];\n");
-    fs::write(Path::new(&env::var("OUT_DIR").unwrap()).join("models.rs"), out).unwrap();
+    out
+}
+
+fn main() {
+    let manifest = env::var("CARGO_MANIFEST_DIR").unwrap();
+    let assets = Path::new(&manifest).join("../assets");
+    let code = lista(&assets.join("models"), "MODELS") + &lista(&assets.join("props"), "PROPS");
+    fs::write(Path::new(&env::var("OUT_DIR").unwrap()).join("models.rs"), code).unwrap();
 }

@@ -1,7 +1,8 @@
 //! La nave: aceleración, frenado y giro progresivos, todo en función de `dt`.
 use crate::{input::Input, Mat4, Vec3};
 
-const EMPUJE: f32 = 40.0; // u/s²
+/// Aceleración del motor (u/s²). Ninguna gravedad del escenario puede superarla.
+pub const EMPUJE: f32 = 40.0;
 const EMPUJE_REVERSA: f32 = 20.0;
 const ARRASTRE: f32 = 0.5; // 1/s, frenado natural
 const ARRASTRE_FRENO: f32 = 3.0;

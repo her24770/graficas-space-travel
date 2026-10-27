@@ -14,6 +14,11 @@ pub mod bits {
     pub const START: u32 = 256;
     /// Se envía solo en el cuadro en que se presiona la tecla (M).
     pub const MENU: u32 = 512;
+    /// Teclas de una pulsación: G gravedad, O órbita, V vista, R semilla de los objetos.
+    pub const GRAVITY: u32 = 1024;
+    pub const ORBIT: u32 = 2048;
+    pub const VIEW: u32 = 4096;
+    pub const RESEED: u32 = 8192;
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -28,6 +33,10 @@ pub struct Input {
     pub cycle_model: bool,
     pub start: bool,
     pub menu: bool,
+    pub toggle_gravity: bool,
+    pub toggle_orbit: bool,
+    pub toggle_view: bool,
+    pub reseed: bool,
 }
 
 impl Input {
@@ -43,6 +52,10 @@ impl Input {
             cycle_model: b & bits::CYCLE_MODEL != 0,
             start: b & bits::START != 0,
             menu: b & bits::MENU != 0,
+            toggle_gravity: b & bits::GRAVITY != 0,
+            toggle_orbit: b & bits::ORBIT != 0,
+            toggle_view: b & bits::VIEW != 0,
+            reseed: b & bits::RESEED != 0,
         }
     }
 }
