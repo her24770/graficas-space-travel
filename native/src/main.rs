@@ -6,11 +6,13 @@ use std::time::Instant;
 /// al agrandarla o ponerla en pantalla completa se ve nítida sin volverse lenta.
 const ALTO_INTERNO: usize = 540;
 
-const TECLAS: [(Key, u32); 7] = [
+const TECLAS: [(Key, u32); 9] = [
     (Key::W, bits::FORWARD),
     (Key::S, bits::BACKWARD),
     (Key::A, bits::YAW_LEFT),
     (Key::D, bits::YAW_RIGHT),
+    (Key::Left, bits::YAW_LEFT),
+    (Key::Right, bits::YAW_RIGHT),
     (Key::Up, bits::PITCH_UP),
     (Key::Down, bits::PITCH_DOWN),
     (Key::Space, bits::BRAKE),
@@ -53,6 +55,9 @@ fn main() {
         }
         if window.is_key_pressed(Key::Enter, KeyRepeat::No) {
             b |= bits::START;
+        }
+        if window.is_key_pressed(Key::M, KeyRepeat::No) {
+            b |= bits::MENU;
         }
 
         game.update(dt, &Input::from_bits(b));

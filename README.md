@@ -35,15 +35,23 @@ La primera vez tarda unos minutos (instala `wasm-bindgen-cli`); después queda e
 | Tecla | Acción |
 |---|---|
 | `W` / `S` | Acelerar / reversa |
-| `A` / `D` | Girar izquierda / derecha |
+| `A` / `D` o `←` / `→` | Girar izquierda / derecha |
 | `↑` / `↓` | Subir / bajar la nariz |
 | `Espacio` | Frenar |
-| `Enter` | Empezar la carrera (o revancha) |
+| `Enter` | Jugar (en el menú) · empezar la carrera o la revancha (en la sala) |
+| `M` | Volver al menú (desde la sala o los resultados) |
 | `Tab` | Cambiar de modelo de nave |
 | `F` | Pantalla completa (web) |
 | `Esc` | Salir (solo nativo) |
 
 **Pantalla completa.** La ventana se puede agrandar y el juego se adapta: dibuja a una altura fija (540 px) y el ancho sigue la proporción de la ventana. En el navegador usa `F`, doble clic o `F11`. En nativo, el botón verde de la ventana (macOS) o maximizarla; el sistema no permite un modo de pantalla completa propio con `minifb`.
+
+## Menú y sala de espera
+
+1. **Menú de inicio.** Al abrir el juego aparece el menú: la nave está quieta (no se mueve), la cámara recorre el sistema solar y se elige la nave con `A`/`D` o `Tab`. El panel de la derecha muestra si hay conexión y quién está en la sala. `Enter` = jugar.
+2. **Sala de espera.** Después de jugar entras a la sala: todos están en el mismo mapa y pueden **volar libremente** (para practicar o explorar los planetas). Abajo a la izquierda se lista quién está en la sala. **Cualquiera** puede iniciar la carrera con `Enter`; `M` vuelve al menú.
+3. **Carrera.** Al iniciar, **todos** pasan solos a la cuenta regresiva (aunque estén en el menú), se colocan en su casilla de salida y esperan. Después largan.
+4. **Resultados.** Cuando todos terminan aparecen los tiempos. `Enter` = revancha, `M` = menú.
 
 ## La carrera
 

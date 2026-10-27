@@ -12,6 +12,8 @@ pub mod bits {
     pub const CYCLE_MODEL: u32 = 128;
     /// Se envía solo en el cuadro en que se presiona la tecla (Enter).
     pub const START: u32 = 256;
+    /// Se envía solo en el cuadro en que se presiona la tecla (M).
+    pub const MENU: u32 = 512;
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -25,6 +27,7 @@ pub struct Input {
     pub brake: bool,
     pub cycle_model: bool,
     pub start: bool,
+    pub menu: bool,
 }
 
 impl Input {
@@ -39,6 +42,7 @@ impl Input {
             brake: b & bits::BRAKE != 0,
             cycle_model: b & bits::CYCLE_MODEL != 0,
             start: b & bits::START != 0,
+            menu: b & bits::MENU != 0,
         }
     }
 }
