@@ -173,6 +173,16 @@ impl Mesh {
         }
     }
 
+    pub fn rotated_y_180(&self) -> Mesh {
+        let giro = |v: &Vec3| Vec3::new(-v.x, v.y, -v.z);
+        Mesh {
+            vertices: self.vertices.iter().map(giro).collect(),
+            triangles: self.triangles.clone(),
+            normals: self.normals.iter().map(giro).collect(),
+            colors: self.colors.clone(),
+        }
+    }
+
     /// Copia centrada en su caja envolvente y escalada a radio 1.
     /// Así cualquier modelo se ve bien sin importar cómo se exportó.
     pub fn normalized(&self) -> Mesh {
@@ -268,6 +278,16 @@ Kd 0 0 1
         let mut m = Mesh::cube();
         m.recompute_normals();
         assert!(m.normals.iter().zip(&m.vertices).all(|(n, v)| (n.length() - 1.0).abs() < 1e-5 && n.dot(*v) > 0.0));
+    }
+    #[test]
+    fn rotated_y_180_invierte_x_y_z_y_conserva_las_caras() {
+        let m = parse(b"v 1 2 3
+        v 0 0 0
+        v 0 1 0
+        f 1 2 3
+        ").unwrap().rotated_y_180();
+        assert_eq!(m.vertices[0], Vec3::new(-1.0, 2.0, -3.0));
+        assert_eq!(m.triangles, vec![[0, 1, 2]]);
     }
 
     #[test]

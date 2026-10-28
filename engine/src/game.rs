@@ -40,6 +40,9 @@ const AVISO_S: f32 = 2.0;
 const CAPTURA_RADIOS: f32 = 5.0;
 /// Los objetos de superficie se dibujan a menos de esta distancia (en radios del planeta).
 const PROPS_DISTANCIA: f32 = 14.0;
+/// Giro de 180 grados y escala para el modelo, los modelos vienen normalizados a radio 1
+const AJUSTES_NAVE: &[(&str, bool, f32)] = &[("xwing", true, 2.0)];
+const ESCALA_NAVE: f32 = 1.2;
 
 /// Pantalla en la que está el jugador: el menú de inicio o el juego.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +76,7 @@ pub struct CollisionEvent {
 struct Model {
     name: String,
     mesh: Mesh,
+    scale: f32,
 }
 
 struct Star {
@@ -153,19 +157,27 @@ fn body_name(i: usize) -> &'static str {
     }
 }
 
+fn escala_nave(escala: f32) -> Mat4 {
+    Mat4::scale(Vec3::new(escala, escala, escala))
+}
+
 impl Game {
     pub fn new(seed: u64) -> Self {
         let mut models: Vec<Model> = assets::MODELS
             .iter()
             .map(|(name, bytes)| match obj::parse_with_mtl(bytes, assets::model_mtl(name)) {
-                Ok(m) => Model { name: name.to_string(), mesh: m.normalized() },
-                Err(e) => Model { name: format!("{name} (ERROR: {e})"), mesh: Mesh::cube().normalized() },
+                Ok(m) => {
+                    let (girar, scale) = AJUSTES_NAVE.iter().find(|a| a.0 == *name).map_or((false, ESCALA_NAVE), |a| (a.1, a.2));
+                    let mesh = if girar { m.rotated_y_180().normalized() } else { m.normalized() };
+                    Model { name: name.to_string(), mesh, scale }
+                }
+                Err(e) => Model { name: format!("{name} (ERROR: {e})"), mesh: Mesh::cube().normalized(), scale: ESCALA_NAVE },
             })
             .collect();
         if models.is_empty() {
-            models.push(Model { name: "cubo (sin modelos)".into(), mesh: Mesh::cube().normalized() });
+            models.push(Model { name: "cubo (sin modelos)".into(), mesh: Mesh::cube().normalized(), scale: ESCALA_NAVE });
         }
-        let selected = models.iter().position(|m| m.name == "nave").unwrap_or(0);
+        let selected = models.iter().position(|m| m.name == "xwing").unwrap_or(0);
 
         let mut rng = Rng::new(seed);
         let stars = (0..400)
@@ -704,27 +716,28 @@ impl Game {
         // Rivales y mi nave
         for r in &self.remotes {
             let s = &r.shown;
-            let mesh = &self.models[s.model as usize % self.models.len()].mesh;
-            let model = Mat4::translation(s.position) * Mat4::rotation_y(s.yaw) * Mat4::rotation_x(s.pitch);
+            let modelo = &self.models[s.model as usize % self.models.len()];
+            let (mesh, escala) = (&modelo.mesh, modelo.scale);
+            let model = Mat4::translation(s.position) * Mat4::rotation_y(s.yaw) * Mat4::rotation_x(s.pitch) * escala_nave(escala);
             let color = COLORES_JUGADORES[s.id as usize % COLORES_JUGADORES.len()];
-            self.draw_object(fb, &v, &mut st, mesh, &model, s.position, 1.2, &Material::Flat { color });
+            self.draw_object(fb, &v, &mut st, mesh, &model, s.position, escala, &Material::Metal { color });
         }
-        let mesh = &self.models[self.selected].mesh;
+        let (mesh, escala) = (&self.models[self.selected].mesh, self.models[self.selected].scale);
         if menu {
             // Vista previa: la nave gira frente a la cámara, con una luz propia desde un costado.
             let f = (target - eye).normalize();
             let (right, up) = (f.cross(Vec3::Y).normalize(), f.cross(Vec3::Y).normalize().cross(f));
             let pos = eye + f * 7.0 + up * 0.5;
-            let model = Mat4::translation(pos) * Mat4::rotation_y(self.time * 0.9) * Mat4::rotation_x(0.35);
+            let model = Mat4::translation(pos) * Mat4::rotation_y(self.time * 0.9) * Mat4::rotation_x(0.35) * escala_nave(escala);
             let luz = Scene { light_pos: eye + right * 25.0 + up * 18.0 - f * 8.0, ..v.scene };
             let vista = View { vp: v.vp, frustum: v.frustum, scene: luz, focal: v.focal, eye: v.eye };
-            self.draw_object(fb, &vista, &mut st, mesh, &model, pos, 1.2, &Material::Flat { color: COLOR_PROPIO });
+            self.draw_object(fb, &vista, &mut st, mesh, &model, pos, escala, &Material::Metal { color: COLOR_PROPIO });
             self.draw_menu(fb);
         } else {
             // En primera persona la nave propia no se dibuja: no tapa la vista.
             if self.view == ViewMode::ThirdPerson {
-                let model = Mat4::translation(self.ship.position) * self.ship.rotation();
-                self.draw_object(fb, &v, &mut st, mesh, &model, self.ship.position, 1.2, &Material::Flat { color: COLOR_PROPIO });
+                let model = Mat4::translation(self.ship.position) * self.ship.rotation() * escala_nave(escala);
+                self.draw_object(fb, &v, &mut st, mesh, &model, self.ship.position, escala, &Material::Metal { color: COLOR_PROPIO });
             }
             self.draw_hud(fb, &v, &st);
         }
