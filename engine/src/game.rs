@@ -157,7 +157,7 @@ impl Game {
     pub fn new(seed: u64) -> Self {
         let mut models: Vec<Model> = assets::MODELS
             .iter()
-            .map(|(name, bytes)| match obj::parse(bytes) {
+            .map(|(name, bytes)| match obj::parse_with_mtl(bytes, assets::model_mtl(name)) {
                 Ok(m) => Model { name: name.to_string(), mesh: m.normalized() },
                 Err(e) => Model { name: format!("{name} (ERROR: {e})"), mesh: Mesh::cube().normalized() },
             })
@@ -196,7 +196,7 @@ impl Game {
                 p.props
                     .iter()
                     .map(|def| {
-                        let modelo = assets::PROPS.iter().find(|(n, _)| *n == def.model).and_then(|(_, b)| obj::parse(b).ok());
+                        let modelo = assets::PROPS.iter().find(|(n, _)| *n == def.model).and_then(|(n, b)| obj::parse_with_mtl(b, assets::prop_mtl(n)).ok());
                         modelo.map_or(0, |m| {
                             prop_meshes.push(m.grounded());
                             prop_meshes.len() - 1

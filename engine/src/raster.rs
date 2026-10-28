@@ -40,7 +40,12 @@ pub fn draw_mesh(
     let smooth = !normals.is_empty();
     let mut drawn = 0;
 
-    for t in &mesh.triangles {
+    for (ti, t) in mesh.triangles.iter().enumerate() {
+        let material = &match (mesh.colors.get(ti), *material) {
+            (Some(&c), Material::Metal { .. }) => Material::Metal { color: c },
+            (Some(&c), Material::Flat { .. }) => Material::Flat { color: c },
+            (_, m) => m,
+        };
         let idx = [t[0] as usize, t[1] as usize, t[2] as usize];
         let face = (world[idx[1]] - world[idx[0]]).cross(world[idx[2]] - world[idx[0]]).normalize();
         let tri = idx.map(|i| ClipVertex {
@@ -168,6 +173,7 @@ mod tests {
             vertices: vec![Vec3::new(-1.0, -1.0, z), Vec3::new(1.0, -1.0, z), Vec3::new(0.0, 1.0, z)],
             triangles: vec![[0, 1, 2]],
             normals: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -219,6 +225,7 @@ mod tests {
             vertices: vec![Vec3::new(-1.0, -1.0, 10.0), Vec3::new(1.0, -1.0, 10.0), Vec3::new(0.0, 1.0, -10.0)],
             triangles: vec![[0, 1, 2]],
             normals: Vec::new(),
+            ..Default::default()
         };
         draw_mesh(&mut fb, &m, &Mat4::IDENTITY, &camara(), &rojo(), &escena());
     }
