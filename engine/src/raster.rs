@@ -1,7 +1,9 @@
 //! Rasterizador de triángulos propio: recorte contra el plano cercano, división de
 //! perspectiva, descarte de caras traseras, z-buffer e interpolación de atributos
 //! corregida por perspectiva para el fragment shader.
-use crate::shaders::{shade, Fragment, Material, Scene};
+use crate::shaders::{blend, shade, Fragment, Material, Scene};
+
+const FUERZA_TINTE: f32 = 0.45;
 use crate::{Framebuffer, Mat4, Mesh, Vec3, Vec4};
 
 /// Atributos que se interpolan por píxel.
@@ -41,10 +43,15 @@ pub fn draw_mesh(
     let mut drawn = 0;
 
     for (ti, t) in mesh.triangles.iter().enumerate() {
-        let material = &match (mesh.colors.get(ti), *material) {
-            (Some(&c), Material::Metal { .. }) => Material::Metal { color: c },
-            (Some(&c), Material::Flat { .. }) => Material::Flat { color: c },
-            (_, m) => m,
+        // El color de cada parte viene del modelo y se mezcla el tinte del jugador
+        let propio = mesh.colors.get(ti).copied();
+        let material = &match *material {
+            Material::Metal { color, tint } => {
+                let base = propio.unwrap_or(color);
+                Material::Metal { color: tint.map_or(base, |t| blend(base, t, FUERZA_TINTE)), tint: None }
+            }
+            Material::Flat { color } => Material::Flat { color: propio.unwrap_or(color) },
+            m => m,
         };
         let idx = [t[0] as usize, t[1] as usize, t[2] as usize];
         let face = (world[idx[1]] - world[idx[0]]).cross(world[idx[2]] - world[idx[0]]).normalize();

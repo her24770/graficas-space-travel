@@ -85,6 +85,7 @@ impl App {
         match ServerMsg::decode(bytes) {
             Some(ServerMsg::Welcome { id }) => {
                 self.my_id = Some(id);
+                self.game.set_my_id(Some(id));
                 self.game.set_online(true);
             }
             Some(ServerMsg::Snapshot(snap)) => {
@@ -121,6 +122,7 @@ impl App {
     /// La conexión se cayó: se sigue jugando solo.
     pub fn net_closed(&mut self) {
         self.my_id = None;
+        self.game.set_my_id(None);
         self.outgoing.clear();
         self.game.set_online(false);
         self.game.place_on_grid();

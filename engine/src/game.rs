@@ -129,6 +129,7 @@ pub struct Game {
     progress: usize,
     finish_time: Option<f32>,
     slot: usize,
+    my_id: Option<u32>,
     start_request: bool,
     screen: Screen,
     prev_input: Input,
@@ -155,6 +156,11 @@ fn body_name(i: usize) -> &'static str {
     } else {
         PLANETS[i - 1].name
     }
+}
+
+/// Color de un jugador: el de su nombre en la sala y el tinte de su nave.
+fn color_jugador(id: u32) -> u32 {
+    COLORES_JUGADORES[id as usize % COLORES_JUGADORES.len()]
 }
 
 fn escala_nave(escala: f32) -> Mat4 {
@@ -236,6 +242,7 @@ impl Game {
             progress: 0,
             finish_time: None,
             slot: 0,
+            my_id: None,
             start_request: false,
             screen: Screen::Menu,
             prev_input: Input::default(),
@@ -571,6 +578,10 @@ impl Game {
         self.remotes.len()
     }
 
+    pub fn set_my_id(&mut self, id: Option<u32>) {
+        self.my_id = id;
+    }
+
     /// Casilla de salida de este jugador (según su orden entre los conectados).
     pub fn set_slot(&mut self, slot: usize) {
         if slot != self.slot {
@@ -720,7 +731,8 @@ impl Game {
             let (mesh, escala) = (&modelo.mesh, modelo.scale);
             let model = Mat4::translation(s.position) * Mat4::rotation_y(s.yaw) * Mat4::rotation_x(s.pitch) * escala_nave(escala);
             let color = COLORES_JUGADORES[s.id as usize % COLORES_JUGADORES.len()];
-            self.draw_object(fb, &v, &mut st, mesh, &model, s.position, escala, &Material::Metal { color });
+            let material = self.material_nave(s.model as usize % self.models.len(), color, Some(s.id));
+            self.draw_object(fb, &v, &mut st, mesh, &model, s.position, escala, &material);
         }
         let (mesh, escala) = (&self.models[self.selected].mesh, self.models[self.selected].scale);
         if menu {
@@ -731,21 +743,30 @@ impl Game {
             let model = Mat4::translation(pos) * Mat4::rotation_y(self.time * 0.9) * Mat4::rotation_x(0.35) * escala_nave(escala);
             let luz = Scene { light_pos: eye + right * 25.0 + up * 18.0 - f * 8.0, ..v.scene };
             let vista = View { vp: v.vp, frustum: v.frustum, scene: luz, focal: v.focal, eye: v.eye };
-            self.draw_object(fb, &vista, &mut st, mesh, &model, pos, escala, &Material::Metal { color: COLOR_PROPIO });
+            self.draw_object(fb, &vista, &mut st, mesh, &model, pos, escala, &Material::Metal { color: COLOR_PROPIO, tint: None });
             self.draw_menu(fb);
         } else {
             // En primera persona la nave propia no se dibuja: no tapa la vista.
             if self.view == ViewMode::ThirdPerson {
                 let model = Mat4::translation(self.ship.position) * self.ship.rotation() * escala_nave(escala);
-                self.draw_object(fb, &v, &mut st, mesh, &model, self.ship.position, escala, &Material::Metal { color: COLOR_PROPIO });
+                let material = self.material_nave(self.selected, COLOR_PROPIO, self.my_id);
+                self.draw_object(fb, &v, &mut st, mesh, &model, self.ship.position, escala, &material);
             }
             self.draw_hud(fb, &v, &st);
         }
         st
     }
 
+    /// Si otro jugador usa el mismo modelo de nave, se le pon encima el tinte del color del jugador 
+    fn material_nave(&self, modelo: usize, color: u32, id: Option<u32>) -> Material {
+        let n = self.models.len();
+        let usos = usize::from(self.selected == modelo) + self.remotes.iter().filter(|r| r.shown.model as usize % n == modelo).count();
+        let tint = id.filter(|_| usos > 1).map(color_jugador);
+        Material::Metal { color, tint }
+    }
+
     fn entries(&self) -> Vec<Entry> {
-        let mut list = vec![Entry { label: "TU".into(), color: 0xFFFFFF, progress: self.progress, finish_ms: self.finish_ms() }];
+        let mut list = vec![Entry { label: "TU".into(), color: self.my_id.map_or(0xFFFFFF, color_jugador), progress: self.progress, finish_ms: self.finish_ms() }];
         for r in &self.remotes {
             list.push(Entry {
                 label: format!("J{}", r.shown.id),
@@ -929,7 +950,7 @@ impl Game {
         if self.online {
             filas.push(("ONLINE".into(), 0x66BB6A));
             filas.push((format!("{} JUGADORES", 1 + self.remotes.len()), blanco));
-            filas.push(("TU".into(), blanco));
+            filas.push(("TU".into(), self.my_id.map_or(blanco, color_jugador)));
             for r in &self.remotes {
                 filas.push((format!("J{}", r.shown.id), COLORES_JUGADORES[r.shown.id as usize % COLORES_JUGADORES.len()]));
             }
