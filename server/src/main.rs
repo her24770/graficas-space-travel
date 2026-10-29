@@ -117,7 +117,8 @@ fn on_message(state: &Shared, id: u32, msg: ClientMsg) {
     let now = state.now_ms();
     let mut w = state.world.lock().unwrap();
     match msg {
-        ClientMsg::State(s) if valido(&s) => {
+        ClientMsg::State(mut s) if valido(&s) => {
+            s.name = protocol::clean_name(&s.name);
             w.race.record_progress(id, s.progress, now);
             w.players.insert(id, Entry { state: s, last_seen: now });
         }
@@ -221,7 +222,7 @@ mod tests {
     }
 
     fn estado(x: f32) -> PlayerState {
-        PlayerState { position: [x, 0.0, 0.0], yaw: 0.0, pitch: 0.0, model: 0, progress: 0 }
+        PlayerState { position: [x, 0.0, 0.0], ..PlayerState::default() }
     }
 
     async fn enviar(c: &mut Cliente, m: ClientMsg) {

@@ -1,7 +1,9 @@
 //! Rasterizador de triángulos propio: recorte contra el plano cercano, división de
 //! perspectiva, descarte de caras traseras, z-buffer e interpolación de atributos
 //! corregida por perspectiva para el fragment shader.
-use crate::shaders::{shade, Fragment, Material, Scene};
+use crate::shaders::{blend, shade, Fragment, Material, Scene};
+
+const FUERZA_TINTE: f32 = 0.45;
 use crate::{Framebuffer, Mat4, Mesh, Vec3, Vec4};
 
 /// Atributos que se interpolan por píxel.
@@ -40,7 +42,17 @@ pub fn draw_mesh(
     let smooth = !normals.is_empty();
     let mut drawn = 0;
 
-    for t in &mesh.triangles {
+    for (ti, t) in mesh.triangles.iter().enumerate() {
+        // El color de cada parte viene del modelo y se mezcla el tinte del jugador
+        let propio = mesh.colors.get(ti).copied();
+        let material = &match *material {
+            Material::Metal { color, tint } => {
+                let base = propio.unwrap_or(color);
+                Material::Metal { color: tint.map_or(base, |t| blend(base, t, FUERZA_TINTE)), tint: None }
+            }
+            Material::Flat { color } => Material::Flat { color: propio.unwrap_or(color) },
+            m => m,
+        };
         let idx = [t[0] as usize, t[1] as usize, t[2] as usize];
         let face = (world[idx[1]] - world[idx[0]]).cross(world[idx[2]] - world[idx[0]]).normalize();
         let tri = idx.map(|i| ClipVertex {
@@ -168,6 +180,7 @@ mod tests {
             vertices: vec![Vec3::new(-1.0, -1.0, z), Vec3::new(1.0, -1.0, z), Vec3::new(0.0, 1.0, z)],
             triangles: vec![[0, 1, 2]],
             normals: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -219,6 +232,7 @@ mod tests {
             vertices: vec![Vec3::new(-1.0, -1.0, 10.0), Vec3::new(1.0, -1.0, 10.0), Vec3::new(0.0, 1.0, -10.0)],
             triangles: vec![[0, 1, 2]],
             normals: Vec::new(),
+            ..Default::default()
         };
         draw_mesh(&mut fb, &m, &Mat4::IDENTITY, &camara(), &rojo(), &escena());
     }

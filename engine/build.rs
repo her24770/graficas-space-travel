@@ -21,6 +21,16 @@ fn lista(dir: &Path, constante: &str) -> String {
         out.push_str(&format!("    ({n:?}, include_bytes!({:?})),\n", abs.to_string_lossy()));
     }
     out.push_str("];\n");
+    // Pintar el modelo con el .mtl 
+    out.push_str(&format!("pub const {constante}_MTL: &[(&str, &str)] = &[\n"));
+    for n in &names {
+        let abs = dir.join(format!("{n}.mtl"));
+        if abs.exists() {
+            println!("cargo:rerun-if-changed={}", abs.display());
+            out.push_str(&format!("    ({n:?}, include_str!({:?})),\n", abs.to_string_lossy()));
+        }
+    }
+    out.push_str("];\n");
     out
 }
 

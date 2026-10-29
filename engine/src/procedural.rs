@@ -41,7 +41,7 @@ pub fn icosphere(subdivisions: u32) -> Mesh {
         }
         triangles = next;
     }
-    Mesh { normals: vertices.clone(), vertices, triangles }
+    Mesh { normals: vertices.clone(), vertices, triangles, ..Default::default() }
 }
 
 /// Esfera de radio variable: cada vértice se mueve hacia afuera según `radius(dir)`.
@@ -69,7 +69,7 @@ pub fn cone(segments: u32) -> Mesh {
         triangles.push([0, b, a]); // costado
         triangles.push([1, a, b]); // base
     }
-    Mesh { vertices, triangles, normals: Vec::new() }
+    Mesh { vertices, triangles, ..Default::default() }
 }
 
 /// Anillo en el plano XY (se cruza volando a lo largo de Z). `major` = radio del anillo, `minor` = grosor.
@@ -94,7 +94,7 @@ pub fn torus(major: f32, minor: f32, segments: u32, sides: u32) -> Mesh {
             triangles.push([a, c, d]);
         }
     }
-    Mesh { vertices, triangles, normals }
+    Mesh { vertices, triangles, normals, ..Default::default() }
 }
 
 #[cfg(test)]

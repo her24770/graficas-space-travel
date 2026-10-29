@@ -11,7 +11,7 @@ use crate::{
     props::{self, PropInstance},
     race::{Phase, Race},
     raster::{self, draw_mesh},
-    remote::{RemotePlayer, RemoteShip},
+    remote::{RemotePlayer, RemoteShip, NAME_LEN},
     rng::Rng,
     scenario::{self, Gate, GATE_COUNT, PLANETS, PROPS_SEED, SUN_GRAVITY, SUN_RADIUS},
     shaders::{Material, Scene},
@@ -40,6 +40,9 @@ const AVISO_S: f32 = 2.0;
 const CAPTURA_RADIOS: f32 = 5.0;
 /// Los objetos de superficie se dibujan a menos de esta distancia (en radios del planeta).
 const PROPS_DISTANCIA: f32 = 14.0;
+/// Giro de 180 grados y escala para el modelo, los modelos vienen normalizados a radio 1
+const AJUSTES_NAVE: &[(&str, bool, f32)] = &[("xwing", true, 2.0)];
+const ESCALA_NAVE: f32 = 1.2;
 
 /// Pantalla en la que está el jugador: el menú de inicio o el juego.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +76,7 @@ pub struct CollisionEvent {
 struct Model {
     name: String,
     mesh: Mesh,
+    scale: f32,
 }
 
 struct Star {
@@ -125,6 +129,9 @@ pub struct Game {
     progress: usize,
     finish_time: Option<f32>,
     slot: usize,
+    my_id: Option<u32>,
+    /// Mi nombre (ASCII, ceros al final); todo ceros = sin nombre.
+    name: [u8; NAME_LEN],
     start_request: bool,
     screen: Screen,
     prev_input: Input,
@@ -153,19 +160,37 @@ fn body_name(i: usize) -> &'static str {
     }
 }
 
+fn nombre_mostrado(name: &[u8; NAME_LEN], por_defecto: String) -> String {
+    let largo = name.iter().position(|&b| b == 0).unwrap_or(NAME_LEN);
+    if largo == 0 { por_defecto } else { String::from_utf8_lossy(&name[..largo]).into_owned() }
+}
+
+/// Color de un jugador: el de su nombre en la sala y el tinte de su nave.
+fn color_jugador(id: u32) -> u32 {
+    COLORES_JUGADORES[id as usize % COLORES_JUGADORES.len()]
+}
+
+fn escala_nave(escala: f32) -> Mat4 {
+    Mat4::scale(Vec3::new(escala, escala, escala))
+}
+
 impl Game {
     pub fn new(seed: u64) -> Self {
         let mut models: Vec<Model> = assets::MODELS
             .iter()
-            .map(|(name, bytes)| match obj::parse(bytes) {
-                Ok(m) => Model { name: name.to_string(), mesh: m.normalized() },
-                Err(e) => Model { name: format!("{name} (ERROR: {e})"), mesh: Mesh::cube().normalized() },
+            .map(|(name, bytes)| match obj::parse_with_mtl(bytes, assets::model_mtl(name)) {
+                Ok(m) => {
+                    let (girar, scale) = AJUSTES_NAVE.iter().find(|a| a.0 == *name).map_or((false, ESCALA_NAVE), |a| (a.1, a.2));
+                    let mesh = if girar { m.rotated_y_180().normalized() } else { m.normalized() };
+                    Model { name: name.to_string(), mesh, scale }
+                }
+                Err(e) => Model { name: format!("{name} (ERROR: {e})"), mesh: Mesh::cube().normalized(), scale: ESCALA_NAVE },
             })
             .collect();
         if models.is_empty() {
-            models.push(Model { name: "cubo (sin modelos)".into(), mesh: Mesh::cube().normalized() });
+            models.push(Model { name: "cubo (sin modelos)".into(), mesh: Mesh::cube().normalized(), scale: ESCALA_NAVE });
         }
-        let selected = models.iter().position(|m| m.name == "nave").unwrap_or(0);
+        let selected = models.iter().position(|m| m.name == "xwing").unwrap_or(0);
 
         let mut rng = Rng::new(seed);
         let stars = (0..400)
@@ -196,7 +221,7 @@ impl Game {
                 p.props
                     .iter()
                     .map(|def| {
-                        let modelo = assets::PROPS.iter().find(|(n, _)| *n == def.model).and_then(|(_, b)| obj::parse(b).ok());
+                        let modelo = assets::PROPS.iter().find(|(n, _)| *n == def.model).and_then(|(n, b)| obj::parse_with_mtl(b, assets::prop_mtl(n)).ok());
                         modelo.map_or(0, |m| {
                             prop_meshes.push(m.grounded());
                             prop_meshes.len() - 1
@@ -224,6 +249,8 @@ impl Game {
             progress: 0,
             finish_time: None,
             slot: 0,
+            my_id: None,
+            name: [0; NAME_LEN],
             start_request: false,
             screen: Screen::Menu,
             prev_input: Input::default(),
@@ -527,6 +554,7 @@ impl Game {
             model: self.selected as u8,
             progress: self.progress as u8,
             finish_ms: self.finish_ms(),
+            name: self.name,
         }
     }
 
@@ -557,6 +585,14 @@ impl Game {
 
     pub fn remote_count(&self) -> usize {
         self.remotes.len()
+    }
+
+    pub fn set_name(&mut self, name: [u8; NAME_LEN]) {
+        self.name = name;
+    }
+
+    pub fn set_my_id(&mut self, id: Option<u32>) {
+        self.my_id = id;
     }
 
     /// Casilla de salida de este jugador (según su orden entre los conectados).
@@ -704,38 +740,49 @@ impl Game {
         // Rivales y mi nave
         for r in &self.remotes {
             let s = &r.shown;
-            let mesh = &self.models[s.model as usize % self.models.len()].mesh;
-            let model = Mat4::translation(s.position) * Mat4::rotation_y(s.yaw) * Mat4::rotation_x(s.pitch);
+            let modelo = &self.models[s.model as usize % self.models.len()];
+            let (mesh, escala) = (&modelo.mesh, modelo.scale);
+            let model = Mat4::translation(s.position) * Mat4::rotation_y(s.yaw) * Mat4::rotation_x(s.pitch) * escala_nave(escala);
             let color = COLORES_JUGADORES[s.id as usize % COLORES_JUGADORES.len()];
-            self.draw_object(fb, &v, &mut st, mesh, &model, s.position, 1.2, &Material::Flat { color });
+            let material = self.material_nave(s.model as usize % self.models.len(), color, Some(s.id));
+            self.draw_object(fb, &v, &mut st, mesh, &model, s.position, escala, &material);
         }
-        let mesh = &self.models[self.selected].mesh;
+        let (mesh, escala) = (&self.models[self.selected].mesh, self.models[self.selected].scale);
         if menu {
             // Vista previa: la nave gira frente a la cámara, con una luz propia desde un costado.
             let f = (target - eye).normalize();
             let (right, up) = (f.cross(Vec3::Y).normalize(), f.cross(Vec3::Y).normalize().cross(f));
             let pos = eye + f * 7.0 + up * 0.5;
-            let model = Mat4::translation(pos) * Mat4::rotation_y(self.time * 0.9) * Mat4::rotation_x(0.35);
+            let model = Mat4::translation(pos) * Mat4::rotation_y(self.time * 0.9) * Mat4::rotation_x(0.35) * escala_nave(escala);
             let luz = Scene { light_pos: eye + right * 25.0 + up * 18.0 - f * 8.0, ..v.scene };
             let vista = View { vp: v.vp, frustum: v.frustum, scene: luz, focal: v.focal, eye: v.eye };
-            self.draw_object(fb, &vista, &mut st, mesh, &model, pos, 1.2, &Material::Flat { color: COLOR_PROPIO });
+            self.draw_object(fb, &vista, &mut st, mesh, &model, pos, escala, &Material::Metal { color: COLOR_PROPIO, tint: None });
             self.draw_menu(fb);
         } else {
             // En primera persona la nave propia no se dibuja: no tapa la vista.
             if self.view == ViewMode::ThirdPerson {
-                let model = Mat4::translation(self.ship.position) * self.ship.rotation();
-                self.draw_object(fb, &v, &mut st, mesh, &model, self.ship.position, 1.2, &Material::Flat { color: COLOR_PROPIO });
+                let model = Mat4::translation(self.ship.position) * self.ship.rotation() * escala_nave(escala);
+                let material = self.material_nave(self.selected, COLOR_PROPIO, self.my_id);
+                self.draw_object(fb, &v, &mut st, mesh, &model, self.ship.position, escala, &material);
             }
             self.draw_hud(fb, &v, &st);
         }
         st
     }
 
+    /// Si otro jugador usa el mismo modelo de nave, se le pon encima el tinte del color del jugador 
+    fn material_nave(&self, modelo: usize, color: u32, id: Option<u32>) -> Material {
+        let n = self.models.len();
+        let usos = usize::from(self.selected == modelo) + self.remotes.iter().filter(|r| r.shown.model as usize % n == modelo).count();
+        let tint = id.filter(|_| usos > 1).map(color_jugador);
+        Material::Metal { color, tint }
+    }
+
     fn entries(&self) -> Vec<Entry> {
-        let mut list = vec![Entry { label: "TU".into(), color: 0xFFFFFF, progress: self.progress, finish_ms: self.finish_ms() }];
+        let mut list = vec![Entry { label: nombre_mostrado(&self.name, "TU".into()), color: self.my_id.map_or(0xFFFFFF, color_jugador), progress: self.progress, finish_ms: self.finish_ms() }];
         for r in &self.remotes {
             list.push(Entry {
-                label: format!("J{}", r.shown.id),
+                label: nombre_mostrado(&r.shown.name, format!("J{}", r.shown.id)),
                 color: COLORES_JUGADORES[r.shown.id as usize % COLORES_JUGADORES.len()],
                 progress: r.target.progress as usize,
                 finish_ms: r.target.finish_ms,
@@ -916,9 +963,9 @@ impl Game {
         if self.online {
             filas.push(("ONLINE".into(), 0x66BB6A));
             filas.push((format!("{} JUGADORES", 1 + self.remotes.len()), blanco));
-            filas.push(("TU".into(), blanco));
+            filas.push((nombre_mostrado(&self.name, "TU".into()), self.my_id.map_or(blanco, color_jugador)));
             for r in &self.remotes {
-                filas.push((format!("J{}", r.shown.id), COLORES_JUGADORES[r.shown.id as usize % COLORES_JUGADORES.len()]));
+                filas.push((nombre_mostrado(&r.shown.name, format!("J{}", r.shown.id)), COLORES_JUGADORES[r.shown.id as usize % COLORES_JUGADORES.len()]));
             }
         } else {
             filas.push(("SIN CONEXION".into(), 0xEF9A9A));
@@ -1028,7 +1075,7 @@ mod tests {
     use super::*;
 
     fn rival(id: u32, x: f32) -> RemoteShip {
-        RemoteShip { id, position: Vec3::new(x, 0.0, -10.0), yaw: 0.0, pitch: 0.0, model: 0, progress: 0, finish_ms: 0 }
+        RemoteShip { id, position: Vec3::new(x, 0.0, -10.0), yaw: 0.0, pitch: 0.0, model: 0, progress: 0, finish_ms: 0, name: [0; NAME_LEN] }
     }
 
     fn avanzar(g: &mut Game, segundos: f32) {

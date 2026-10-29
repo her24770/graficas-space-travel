@@ -27,6 +27,8 @@ pub enum Material {
     Flat { color: u32 },
     /// Color que no depende de la luz (puntos de control).
     Emissive { color: u32 },
+    /// Metal pulido con mezcla de tinte para las naves
+    Metal { color: u32, tint: Option<u32> },
     /// Superficie ardiente que se anima con el tiempo.
     Sun,
     /// Mares, continentes, picos y casquetes polares.
@@ -41,7 +43,7 @@ impl Material {
     /// Color representativo (para el minimapa).
     pub fn tint(&self) -> u32 {
         match *self {
-            Material::Flat { color } | Material::Emissive { color } => color,
+            Material::Flat { color } | Material::Emissive { color } | Material::Metal { color, .. } => color,
             Material::Sun => 0xFFC107,
             Material::Rocky { land, .. } => land,
             Material::Gas { a, .. } | Material::Ice { a, .. } => a,
@@ -56,6 +58,11 @@ fn rgb(c: u32) -> Vec3 {
 fn pack(c: Vec3) -> u32 {
     let ch = |v: f32| (v.clamp(0.0, 1.0) * 255.0) as u32;
     (ch(c.x) << 16) | (ch(c.y) << 8) | ch(c.z)
+}
+
+/// Mezcla dos colores 0xRRGGBB
+pub fn blend(a: u32, b: u32, t: f32) -> u32 {
+    pack(rgb(a).lerp(rgb(b), t))
 }
 
 fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
@@ -125,6 +132,20 @@ pub fn shade(m: &Material, f: &Fragment, s: &Scene) -> u32 {
     match *m {
         Material::Flat { color } => pack(rgb(color) * (0.25 + 0.75 * lambert)),
         Material::Emissive { color } => pack(rgb(color)),
+        Material::Metal { color, .. } => {
+            let base = rgb(color);
+            let l = (s.light_pos - f.world).normalize();
+            let h = (l + view).normalize();
+            let spec = n.dot(h).max(0.0).powi(48) * if lambert > 0.0 { 1.0 } else { 0.0 };
+            // Reflejo falso: el espacio oscuro arriba y un horizonte claro, según hacia dónde mira la normal.
+            let r = n * (2.0 * n.dot(view)) - view;
+            let env = Vec3::new(0.05, 0.07, 0.12).lerp(Vec3::new(0.75, 0.82, 0.95), smoothstep(-0.4, 0.4, r.y));
+            let fresnel = (1.0 - n.dot(view).max(0.0)).powi(4);
+            let c = base * (0.10 + 0.35 * lambert)
+                + base.lerp(env, 0.5) * (0.35 * (0.3 + 0.7 * lambert) + 0.4 * fresnel)
+                + base.lerp(Vec3::new(1.0, 1.0, 1.0), 0.45) * spec * 1.1;
+            pack(c)
+        }
         Material::Sun => {
             let t = s.time;
             let a = fbm(p * 2.5 + Vec3::new(t * 0.12, 0.0, t * 0.07), 4);
@@ -208,6 +229,15 @@ mod tests {
         let luz = shade(&m, &Fragment { world: Vec3::ZERO, normal: Vec3::new(0.0, 0.0, 1.0), local: Vec3::ZERO }, &escena(0.0));
         let sombra = shade(&m, &Fragment { world: Vec3::ZERO, normal: Vec3::new(0.0, 0.0, -1.0), local: Vec3::ZERO }, &escena(0.0));
         assert!((luz & 0xFF) > (sombra & 0xFF));
+    }
+
+    #[test]
+    fn el_metal_brilla_mas_de_cara_a_la_luz_que_de_espaldas() {
+        let m = Material::Metal { color: 0x8899AA, tint: None };
+        let escena = Scene { time: 0.0, light_pos: Vec3::new(0.0, 0.0, 10.0), eye: Vec3::new(0.0, 0.0, 10.0) };
+        let luz = shade(&m, &Fragment { world: Vec3::ZERO, normal: Vec3::new(0.0, 0.0, 1.0), local: Vec3::ZERO }, &escena);
+        let sombra = shade(&m, &Fragment { world: Vec3::ZERO, normal: Vec3::new(0.0, 0.0, -1.0), local: Vec3::ZERO }, &escena);
+        assert!(luz > sombra);
     }
 
     #[test]

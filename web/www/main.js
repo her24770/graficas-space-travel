@@ -28,12 +28,20 @@ function pantallaCompleta() {
   else document.documentElement.requestFullscreen?.();
 }
 
+// Campo del nombre: mientras se escribe, las teclas no mueven la nave.
+const campoNombre = document.getElementById("nombre");
+
 addEventListener("keydown", (e) => {
+  if (e.target === campoNombre) {
+    if (e.code === "Enter" || e.code === "Escape") campoNombre.blur();
+    return;
+  }
   if (e.code in UNA_VEZ) { if (!e.repeat) unaVez |= UNA_VEZ[e.code]; e.preventDefault(); return; }
   if (e.code === "KeyF") { if (!e.repeat) pantallaCompleta(); e.preventDefault(); return; }
   if (e.code in TECLAS) { presionadas |= TECLAS[e.code]; e.preventDefault(); }
 });
 addEventListener("keyup", (e) => {
+  if (e.target === campoNombre) return;
   if (e.code in TECLAS) { presionadas &= ~TECLAS[e.code]; e.preventDefault(); }
 });
 addEventListener("blur", () => { presionadas = 0; });
@@ -44,6 +52,15 @@ let [ancho, alto] = medidas();
 canvas.width = ancho;
 canvas.height = alto;
 const app = new App(ancho, alto);
+
+// El nombre en localstorage, si esta vacío se mantiene Jid
+try { campoNombre.value = localStorage.getItem("nombre") ?? ""; } catch {}
+function enviarNombre() {
+  app.set_name(campoNombre.value);
+  try { localStorage.setItem("nombre", campoNombre.value); } catch {}
+}
+campoNombre.addEventListener("input", enviarNombre);
+enviarNombre();
 
 addEventListener("resize", () => {
   [ancho, alto] = medidas();
@@ -78,7 +95,10 @@ function loop(now) {
   }
   const bytes = new Uint8ClampedArray(wasm.memory.buffer, app.pixels_ptr(), app.pixels_len());
   ctx.putImageData(new ImageData(bytes, ancho, alto), 0, 0);
-  if (++n % 15 === 0) document.title = app.status();
+  if (++n % 15 === 0) {
+    document.title = app.status();
+    campoNombre.hidden = !app.in_menu();
+  }
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);

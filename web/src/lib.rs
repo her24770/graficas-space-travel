@@ -1,6 +1,6 @@
 //! Envoltura WASM del engine: el canvas solo muestra el framebuffer, sin WebGL.
 //! El JavaScript solo abre el WebSocket y pasa bytes; el protocolo vive en Rust.
-use engine::{Framebuffer, Game, Input, RemoteShip, Vec3};
+use engine::{Framebuffer, Game, Input, RemoteShip, Screen, Vec3};
 use protocol::{encode_client, ClientMsg, PlayerState, ServerMsg, MAX_PLAYERS};
 use std::collections::VecDeque;
 use wasm_bindgen::prelude::*;
@@ -70,6 +70,7 @@ impl App {
                     pitch: s.pitch,
                     model: s.model,
                     progress: s.progress,
+                    name: s.name,
                 })));
             }
         }
@@ -85,6 +86,7 @@ impl App {
         match ServerMsg::decode(bytes) {
             Some(ServerMsg::Welcome { id }) => {
                 self.my_id = Some(id);
+                self.game.set_my_id(Some(id));
                 self.game.set_online(true);
             }
             Some(ServerMsg::Snapshot(snap)) => {
@@ -110,6 +112,7 @@ impl App {
                         model: p.state.model,
                         progress: p.state.progress,
                         finish_ms: p.finish_ms,
+                        name: p.state.name,
                     })
                     .collect();
                 self.game.set_remote_players(&rivals);
@@ -117,10 +120,19 @@ impl App {
             None => {}
         }
     }
+.
+    pub fn set_name(&mut self, name: &str) {
+        self.game.set_name(protocol::clean_name(name.as_bytes()));
+    }
+
+    pub fn in_menu(&self) -> bool {
+        self.game.screen() == Screen::Menu
+    }
 
     /// La conexión se cayó: se sigue jugando solo.
     pub fn net_closed(&mut self) {
         self.my_id = None;
+        self.game.set_my_id(None);
         self.outgoing.clear();
         self.game.set_online(false);
         self.game.place_on_grid();
@@ -146,7 +158,7 @@ mod tests {
     use protocol::*;
 
     fn snapshot(fase: u8, ids: &[u32]) -> Vec<u8> {
-        let estado = PlayerState { position: [0.0, 0.0, 0.0], yaw: 0.0, pitch: 0.0, model: 0, progress: 0 };
+        let estado = PlayerState::default();
         ServerMsg::Snapshot(Snapshot {
             clock_ms: 90_000,
             phase: fase,
@@ -159,6 +171,7 @@ mod tests {
     #[test]
     fn el_motor_y_el_protocolo_usan_los_mismos_numeros() {
         assert_eq!(engine::scenario::GATE_COUNT, GATE_COUNT as usize);
+        assert_eq!(engine::NAME_LEN, NAME_LEN);
         assert_eq!(Phase::Lobby as u8, PHASE_LOBBY);
         assert_eq!(Phase::Countdown as u8, PHASE_COUNTDOWN);
         assert_eq!(Phase::Racing as u8, PHASE_RACING);
