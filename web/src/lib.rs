@@ -120,7 +120,7 @@ impl App {
             None => {}
         }
     }
-.
+
     pub fn set_name(&mut self, name: &str) {
         self.game.set_name(protocol::clean_name(name.as_bytes()));
     }
