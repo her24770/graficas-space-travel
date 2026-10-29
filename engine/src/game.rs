@@ -11,7 +11,7 @@ use crate::{
     props::{self, PropInstance},
     race::{Phase, Race},
     raster::{self, draw_mesh},
-    remote::{RemotePlayer, RemoteShip},
+    remote::{RemotePlayer, RemoteShip, NAME_LEN},
     rng::Rng,
     scenario::{self, Gate, GATE_COUNT, PLANETS, PROPS_SEED, SUN_GRAVITY, SUN_RADIUS},
     shaders::{Material, Scene},
@@ -130,6 +130,8 @@ pub struct Game {
     finish_time: Option<f32>,
     slot: usize,
     my_id: Option<u32>,
+    /// Mi nombre (ASCII, ceros al final); todo ceros = sin nombre.
+    name: [u8; NAME_LEN],
     start_request: bool,
     screen: Screen,
     prev_input: Input,
@@ -156,6 +158,11 @@ fn body_name(i: usize) -> &'static str {
     } else {
         PLANETS[i - 1].name
     }
+}
+
+fn nombre_mostrado(name: &[u8; NAME_LEN], por_defecto: String) -> String {
+    let largo = name.iter().position(|&b| b == 0).unwrap_or(NAME_LEN);
+    if largo == 0 { por_defecto } else { String::from_utf8_lossy(&name[..largo]).into_owned() }
 }
 
 /// Color de un jugador: el de su nombre en la sala y el tinte de su nave.
@@ -243,6 +250,7 @@ impl Game {
             finish_time: None,
             slot: 0,
             my_id: None,
+            name: [0; NAME_LEN],
             start_request: false,
             screen: Screen::Menu,
             prev_input: Input::default(),
@@ -546,6 +554,7 @@ impl Game {
             model: self.selected as u8,
             progress: self.progress as u8,
             finish_ms: self.finish_ms(),
+            name: self.name,
         }
     }
 
@@ -576,6 +585,10 @@ impl Game {
 
     pub fn remote_count(&self) -> usize {
         self.remotes.len()
+    }
+
+    pub fn set_name(&mut self, name: [u8; NAME_LEN]) {
+        self.name = name;
     }
 
     pub fn set_my_id(&mut self, id: Option<u32>) {
@@ -766,10 +779,10 @@ impl Game {
     }
 
     fn entries(&self) -> Vec<Entry> {
-        let mut list = vec![Entry { label: "TU".into(), color: self.my_id.map_or(0xFFFFFF, color_jugador), progress: self.progress, finish_ms: self.finish_ms() }];
+        let mut list = vec![Entry { label: nombre_mostrado(&self.name, "TU".into()), color: self.my_id.map_or(0xFFFFFF, color_jugador), progress: self.progress, finish_ms: self.finish_ms() }];
         for r in &self.remotes {
             list.push(Entry {
-                label: format!("J{}", r.shown.id),
+                label: nombre_mostrado(&r.shown.name, format!("J{}", r.shown.id)),
                 color: COLORES_JUGADORES[r.shown.id as usize % COLORES_JUGADORES.len()],
                 progress: r.target.progress as usize,
                 finish_ms: r.target.finish_ms,
@@ -950,9 +963,9 @@ impl Game {
         if self.online {
             filas.push(("ONLINE".into(), 0x66BB6A));
             filas.push((format!("{} JUGADORES", 1 + self.remotes.len()), blanco));
-            filas.push(("TU".into(), self.my_id.map_or(blanco, color_jugador)));
+            filas.push((nombre_mostrado(&self.name, "TU".into()), self.my_id.map_or(blanco, color_jugador)));
             for r in &self.remotes {
-                filas.push((format!("J{}", r.shown.id), COLORES_JUGADORES[r.shown.id as usize % COLORES_JUGADORES.len()]));
+                filas.push((nombre_mostrado(&r.shown.name, format!("J{}", r.shown.id)), COLORES_JUGADORES[r.shown.id as usize % COLORES_JUGADORES.len()]));
             }
         } else {
             filas.push(("SIN CONEXION".into(), 0xEF9A9A));
@@ -1062,7 +1075,7 @@ mod tests {
     use super::*;
 
     fn rival(id: u32, x: f32) -> RemoteShip {
-        RemoteShip { id, position: Vec3::new(x, 0.0, -10.0), yaw: 0.0, pitch: 0.0, model: 0, progress: 0, finish_ms: 0 }
+        RemoteShip { id, position: Vec3::new(x, 0.0, -10.0), yaw: 0.0, pitch: 0.0, model: 0, progress: 0, finish_ms: 0, name: [0; NAME_LEN] }
     }
 
     fn avanzar(g: &mut Game, segundos: f32) {

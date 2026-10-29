@@ -7,10 +7,18 @@
   <style>
     html, body { margin: 0; height: 100%; background: #02020a; overflow: hidden; }
     canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; }
+    #nombre {
+      position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+      width: 220px; padding: 6px 10px; box-sizing: border-box; text-align: center;
+      font: 14px monospace; letter-spacing: 2px; text-transform: uppercase;
+      color: #fff; background: rgba(8, 12, 30, .75); border: 1px solid #546e7a; border-radius: 4px;
+    }
+    #nombre:focus { outline: none; border-color: #ffca28; }
   </style>
 </head>
 <body>
   <canvas id="screen" width="960" height="540"></canvas>
+  <input id="nombre" maxlength="6" placeholder="TU NOMBRE" autocomplete="off" spellcheck="false" hidden>
   <script type="module" src="./main.js?v=__VERSION__"></script>
 </body>
 </html>

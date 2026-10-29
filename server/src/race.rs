@@ -77,7 +77,7 @@ mod tests {
     use super::*;
 
     fn jugadores(ids: &[u32]) -> HashMap<u32, PlayerState> {
-        ids.iter().map(|&id| (id, PlayerState { position: [0.0; 3], yaw: 0.0, pitch: 0.0, model: 0, progress: 0 })).collect()
+        ids.iter().map(|&id| (id, PlayerState::default())).collect()
     }
 
     #[test]

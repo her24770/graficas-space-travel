@@ -28,5 +28,5 @@ pub use game::{Game, RenderStats, Screen};
 pub use input::Input;
 pub use math::{Mat4, Vec3, Vec4};
 pub use obj::Mesh;
-pub use remote::RemoteShip;
+pub use remote::{RemoteShip, NAME_LEN};
 pub use ship::Ship;
