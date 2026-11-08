@@ -148,6 +148,9 @@ pub struct Game {
     /// `[planeta][tipo]` → índice en `prop_meshes`.
     prop_mesh_of: Vec<Vec<usize>>,
     placements: Vec<Vec<PropInstance>>,
+    /// Malla del meteorito de cada planeta (radio 1) y de sus anillos (radio exterior 1).
+    meteor_meshes: Vec<Option<Mesh>>,
+    ring_meshes: Vec<Option<Mesh>>,
     props_seed: u64,
     gravity_on: bool,
     view: ViewMode,
@@ -237,6 +240,16 @@ impl Game {
             })
             .collect();
 
+        let modelo_aparte = |nombre: &str| {
+            assets::PROPS.iter().find(|(n, _)| *n == nombre).and_then(|(_, b)| obj::parse(b).ok()).map(|m| m.normalized())
+        };
+        // Sin normales en el .obj, el meteorito se sombrea por caras y se ve anguloso como una roca.
+        let meteor_meshes = PLANETS
+            .iter()
+            .map(|p| p.meteors.as_ref().map(|m| modelo_aparte(m.model).unwrap_or_else(|| procedural::icosphere(1))))
+            .collect();
+        let ring_meshes = PLANETS.iter().map(|p| p.rings.as_ref().and_then(|r| modelo_aparte(r.model))).collect();
+
         let mut game = Self {
             time: 0.0,
             world_time: 0.0,
@@ -264,6 +277,8 @@ impl Game {
             prop_meshes,
             prop_mesh_of,
             placements: Vec::new(),
+            meteor_meshes,
+            ring_meshes,
             props_seed: PROPS_SEED,
             gravity_on: true,
             view: ViewMode::ThirdPerson,
@@ -355,6 +370,7 @@ impl Game {
     fn resolve_collisions(&mut self, dt: f32) {
         // Primero los objetos y al final el cuerpo: así empujar la nave fuera de un árbol nunca la deja dentro del suelo.
         self.collide_props(dt);
+        self.collide_meteors(dt);
         for (i, b) in self.bodies().iter().enumerate() {
             let surface = self.surface_at(i, b, self.ship.position);
             let choque = physics::collide(&mut self.ship.position, &mut self.ship.velocity, NAVE_RADIO, b.center, b.velocity, surface, dt);
@@ -383,6 +399,28 @@ impl Game {
                 let choque = physics::collide(&mut self.ship.position, &mut self.ship.velocity, NAVE_RADIO, centro, velocidad, radio, dt);
                 if let Some(c) = choque.filter(|c| c.impact_speed > IMPACTO_MIN) {
                     golpes.push((p.name, p.props[x.kind].model, c));
+                }
+            }
+        }
+        for (body, objeto, c) in golpes {
+            self.registrar_choque(body, Some(objeto), c);
+        }
+    }
+
+    /// Los meteoritos son esferas sólidas que se mueven: se choca contra ellos como contra un cuerpo.
+    fn collide_meteors(&mut self, dt: f32) {
+        let t = self.world_time;
+        let mut golpes = Vec::new();
+        for p in PLANETS.iter() {
+            let Some(m) = &p.meteors else { continue };
+            for k in 0..m.count {
+                let (centro, radio) = (scenario::meteor_position(p, m, k, t), scenario::meteor(m, k).size);
+                if self.ship.position.distance(centro) > radio + NAVE_RADIO + 1.0 {
+                    continue;
+                }
+                let choque = physics::collide(&mut self.ship.position, &mut self.ship.velocity, NAVE_RADIO, centro, scenario::meteor_velocity(p, m, k, t), radio, dt);
+                if let Some(c) = choque.filter(|c| c.impact_speed > IMPACTO_MIN) {
+                    golpes.push((p.name, m.model, c));
                 }
             }
         }
@@ -753,6 +791,26 @@ impl Game {
             let lod = Self::lod_index(pos.distance(eye), p.radius, v.focal);
             let mesh = self.planet_lods[i].as_ref().map_or(&self.spheres[lod], |l| &l[lod]);
             self.draw_object(fb, &v, &mut st, mesh, &model, pos, scenario::max_radius(p), &p.material);
+
+            // Anillos: modelo aparte, inclinados como el eje del planeta. Se dibujan por las dos caras.
+            if let (Some(r), Some(mesh)) = (&p.rings, &self.ring_meshes[i]) {
+                let k = p.radius * r.scale;
+                let base = Mat4::translation(pos) * Mat4::rotation_z(p.tilt);
+                let material = Material::Ring { a: r.colors.0, b: r.colors.1 };
+                for cara in [Mat4::scale(Vec3::new(k, k, k)), Mat4::rotation_x(PI) * Mat4::scale(Vec3::new(k, k, k))] {
+                    self.draw_object(fb, &v, &mut st, mesh, &(base * cara), pos, k, &material);
+                }
+            }
+            // Meteoritos: modelo aparte, cada uno en su órbita y girando sobre sí mismo.
+            if let (Some(m), Some(mesh)) = (&p.meteors, &self.meteor_meshes[i]) {
+                for k in 0..m.count {
+                    let o = scenario::meteor(m, k);
+                    let centro = scenario::meteor_position(p, m, k, t);
+                    let giro = Mat4::rotation_y(o.spin * t as f32) * Mat4::rotation_x(o.spin * 0.7 * t as f32);
+                    let model = Mat4::translation(centro) * giro * Mat4::scale(Vec3::new(o.size, o.size, o.size));
+                    self.draw_object(fb, &v, &mut st, mesh, &model, centro, o.size, &Material::Meteor);
+                }
+            }
 
             // Objetos de superficie: giran con el planeta porque cuelgan de su misma matriz. Solo de cerca.
             if pos.distance(eye) < p.radius * PROPS_DISTANCIA {
@@ -1484,6 +1542,34 @@ mod tests {
         let choques = g.take_collisions();
         let modelo = p.props[x.kind].model;
         assert!(choques.iter().any(|c| c.body == "AQUA" && c.object == Some(modelo)), "{choques:?}");
+    }
+
+    #[test]
+    fn la_nave_no_atraviesa_un_meteorito_y_los_gaseosos_tienen_su_modelo() {
+        let mut g = jugando();
+        let i = PLANETS.iter().position(|p| p.meteors.is_some()).expect("algún planeta tiene meteoritos");
+        let (p, m) = (&PLANETS[i], PLANETS[i].meteors.as_ref().unwrap());
+        assert!(m.count > 1 && g.meteor_meshes[i].is_some());
+        assert!(g.ring_meshes.iter().zip(PLANETS.iter()).all(|(mesh, p)| mesh.is_some() == p.rings.is_some()), "cada anillo carga su modelo");
+        let t = g.world_time;
+        let (centro, radio) = (scenario::meteor_position(p, m, 0, t), scenario::meteor(m, 0).size);
+        poner(&mut g, centro + Vec3::new(radio + NAVE_RADIO - 0.2, 0.0, 0.0));
+        g.ship.velocity = scenario::meteor_velocity(p, m, 0, t) - Vec3::new(20.0, 0.0, 0.0);
+        g.collide_meteors(0.016);
+        assert!(g.ship.position.distance(centro) >= radio + NAVE_RADIO - 1e-3);
+        assert!(g.take_collisions().iter().any(|c| c.body == p.name && c.object == Some(m.model)));
+    }
+
+    #[test]
+    fn los_meteoritos_orbitan_distinto_y_siempre_igual() {
+        let p = PLANETS.iter().find(|p| p.meteors.is_some()).unwrap();
+        let m = p.meteors.as_ref().unwrap();
+        let (a, b) = (scenario::meteor(m, 0), scenario::meteor(m, 1));
+        assert!(a.distance != b.distance && a.phase != b.phase);
+        assert_eq!(scenario::meteor_position(p, m, 3, 7.0), scenario::meteor_position(p, m, 3, 7.0));
+        assert!(scenario::meteor_position(p, m, 3, 0.0) != scenario::meteor_position(p, m, 3, 5.0), "se mueve");
+        let d = scenario::meteor_position(p, m, 3, 5.0).distance(scenario::planet_position(p, 5.0));
+        assert!((d - scenario::meteor(m, 3).distance).abs() < 1e-2, "órbita circular alrededor del planeta");
     }
 
     #[test]

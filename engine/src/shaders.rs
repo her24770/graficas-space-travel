@@ -37,6 +37,10 @@ pub enum Material {
     Gas { a: u32, b: u32, seed: f32 },
     /// Hielo con grietas.
     Ice { a: u32, b: u32, seed: f32 },
+    /// Anillos con bandas, huecos y ruido fino. Donde son poco densos el píxel se descarta
+    Ring { a: u32, b: u32 },
+    /// Roca oscura con cráteres y grietas de lava que brillan
+    Meteor,
 }
 
 impl Material {
@@ -46,7 +50,8 @@ impl Material {
             Material::Flat { color } | Material::Emissive { color } | Material::Metal { color, .. } => color,
             Material::Sun => 0xFFC107,
             Material::Rocky { land, .. } => land,
-            Material::Gas { a, .. } | Material::Ice { a, .. } => a,
+            Material::Gas { a, .. } | Material::Ice { a, .. } | Material::Ring { a, .. } => a,
+            Material::Meteor => 0xD02A05,
         }
     }
 }
@@ -123,6 +128,23 @@ fn rim(normal: Vec3, view: Vec3, lit: f32) -> f32 {
     (1.0 - normal.dot(view).max(0.0)).powi(3) * (0.25 + lit)
 }
 
+/// Radio interior de los anillos (el exterior es 1).
+const RING_INNER: f32 = 0.565;
+
+/// Ruido fino y densidad de los anillos en la posición local `l` (el disco está en el plano XZ).
+fn ring_profile(l: Vec3) -> (f32, f32) {
+    let r = (l.x * l.x + l.z * l.z).sqrt();
+    let t = (r - RING_INNER) / (1.0 - RING_INNER);
+    let gap = smoothstep(0.52, 0.56, t) * (1.0 - smoothstep(0.62, 0.66, t));
+    let edge = smoothstep(0.0, 0.04, t) * (1.0 - smoothstep(0.96, 1.0, t));
+    let fine = fbm(Vec3::new(t * 60.0, 0.0, 0.0), 3);
+    (fine, edge * (1.0 - gap * 0.95) * (0.45 + 0.55 * fine))
+}
+
+pub fn discards(m: &Material, f: &Fragment) -> bool {
+    matches!(m, Material::Ring { .. }) && ring_profile(f.local).1 < 0.18
+}
+
 pub fn shade(m: &Material, f: &Fragment, s: &Scene) -> u32 {
     let n = f.normal.normalize();
     let lambert = n.dot((s.light_pos - f.world).normalize()).max(0.0);
@@ -177,6 +199,30 @@ pub fn shade(m: &Material, f: &Fragment, s: &Scene) -> u32 {
             let c = rgb(a).lerp(rgb(b), h) * (1.0 - 0.5 * crack);
             pack(c * (0.12 + 0.88 * lambert) + Vec3::new(0.6, 0.8, 1.0) * (rim(n, view, lambert) * 0.5))
         }
+        Material::Ring { a, b } => {
+            let (fine, density) = ring_profile(f.local);
+            let color = rgb(a).lerp(rgb(b), smoothstep(0.3, 0.7, fine)).lerp(rgb(0x3d3226), (1.0 - density) * 0.6);
+            // Se ven las dos caras: la luz cuenta igual venga de arriba o de abajo.
+            let luz = n.dot((s.light_pos - f.world).normalize()).abs();
+            pack(color * (0.25 + 0.75 * luz))
+        }
+        Material::Meteor => {
+            let q = f.local;
+            let t = s.time;
+            // Roca quemada con cráteres 
+            let rock = fbm(q * 4.0, 5);
+            let mut crust = rgb(0x1a1210).lerp(rgb(0x3b2a24), rock);
+            let cr = fbm(q * 3.5 + Vec3::new(1.7, 8.3, 2.9), 2);
+            crust = crust.lerp(rgb(0x0b0706), smoothstep(0.30, 0.22, cr) * 0.8);
+            crust = crust.lerp(rgb(0x5a4638), smoothstep(0.30, 0.34, cr) * smoothstep(0.40, 0.34, cr) * 0.6);
+            // Grietas de lava: donde el ruido cruza 0.5.
+            let h = fbm(q * 3.0 + Vec3::new(0.0, t * 0.03, 0.0), 5);
+            let vein = 1.0 - smoothstep(0.0, 0.07, (h - 0.5).abs());
+            let magma = rgb(0xd02a05).lerp(rgb(0xffc21f), smoothstep(0.4, 1.0, vein));
+            let pulse = 0.75 + 0.25 * (t * 1.5 + rock * 6.0).sin();
+            let lit = crust * (0.08 + 0.92 * lambert) * (1.0 - vein) + (crust.lerp(magma, vein) + magma * (vein * 0.35 * pulse)) * vein;
+            pack(lit + rgb(0xff4a12) * (rim(n, view, lambert) * 0.5))
+        }
     }
 }
 
@@ -207,6 +253,16 @@ mod tests {
         let p = Vec3::new(1.3, 2.7, 0.4);
         let q = p + Vec3::new(0.001, 0.0, 0.0);
         assert!((value_noise(p) - value_noise(q)).abs() < 0.01);
+    }
+
+    #[test]
+    fn los_anillos_dejan_huecos_y_solo_ellos_descartan_pixeles() {
+        let anillo = Material::Ring { a: 0xD8C49A, b: 0x8A7556 };
+        assert!(discards(&anillo, &frag(Vec3::new(0.3, 0.0, 0.0))));
+        assert!(discards(&anillo, &frag(Vec3::new(1.2, 0.0, 0.0))));
+        let dibujados = (0..100).filter(|&i| !discards(&anillo, &frag(Vec3::new(0.57 + i as f32 * 0.004, 0.0, 0.0)))).count();
+        assert!(dibujados > 20, "{dibujados}");
+        assert!(!discards(&Material::Meteor, &frag(Vec3::new(0.3, 0.0, 0.0))));
     }
 
     #[test]

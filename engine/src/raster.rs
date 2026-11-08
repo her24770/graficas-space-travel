@@ -1,7 +1,7 @@
 //! Rasterizador de triángulos propio: recorte contra el plano cercano, división de
 //! perspectiva, descarte de caras traseras, z-buffer e interpolación de atributos
 //! corregida por perspectiva para el fragment shader.
-use crate::shaders::{blend, shade, Fragment, Material, Scene};
+use crate::shaders::{blend, discards, shade, Fragment, Material, Scene};
 
 const FUERZA_TINTE: f32 = 0.45;
 use crate::{Framebuffer, Mat4, Mesh, Vec3, Vec4};
@@ -154,13 +154,17 @@ fn fill_triangle(fb: &mut Framebuffer, tri: [ClipVertex; 3], material: &Material
             if z > 1.0 || z >= fb.depth[idx] {
                 continue;
             }
-            fb.depth[idx] = z;
 
             // Atributos: se interpola attr/w y se divide por 1/w (corrección de perspectiva).
             let (q0, q1, q2) = (b0 * inv_w[0], b1 * inv_w[1], b2 * inv_w[2]);
             let k = 1.0 / (q0 + q1 + q2);
             let mix = |f: fn(&Varyings) -> Vec3| (f(&tri[0].var) * q0 + f(&tri[1].var) * q1 + f(&tri[2].var) * q2) * k;
             let frag = Fragment { world: mix(|v| v.world), normal: mix(|v| v.normal), local: mix(|v| v.local) };
+            // Un píxel descartado (hueco de los anillos) no escribe color ni profundidad.
+            if discards(material, &frag) {
+                continue;
+            }
+            fb.depth[idx] = z;
             fb.pixels[idx] = shade(material, &frag, scene);
         }
     }
