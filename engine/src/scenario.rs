@@ -68,8 +68,8 @@ pub static PLANETS: [PlanetDef; 5] = [
         material: Material::Rocky { sea: 0x5D4037, land: 0xA1522B, peak: 0xE0A070, seed: 11.0 },
         gravity: 10.0, relief: 0.06,
         props: &[
-            PropDef { model: "roca", count: 70, size: 0.5, zone: Zone::Anywhere, color: 0x6D4C41 },
-            PropDef { model: "edificio", count: 6, size: 1.2, zone: Zone::Land, color: 0xB0BEC5 },
+            PropDef { model: "roca", count: 25, size: 1.2, zone: Zone::Anywhere, color: 0x8D8D8D },
+            PropDef { model: "edificio", count: 4, size: 2.8, zone: Zone::Land, color: 0xB0BEC5 },
         ],
     },
     PlanetDef {
@@ -78,8 +78,8 @@ pub static PLANETS: [PlanetDef; 5] = [
         material: Material::Rocky { sea: 0x1E5FB8, land: 0x3E8E41, peak: 0x8D7B68, seed: 4.0 },
         gravity: 14.0, relief: 0.05,
         props: &[
-            PropDef { model: "arbol", count: 140, size: 0.7, zone: Zone::Land, color: 0x2E7D32 },
-            PropDef { model: "roca", count: 40, size: 0.5, zone: Zone::High, color: 0x8D8D8D },
+            PropDef { model: "arbol", count: 50, size: 2.4, zone: Zone::Land, color: 0x2E7D32 },
+            PropDef { model: "roca", count: 15, size: 1.2, zone: Zone::High, color: 0x8D8D8D },
         ],
     },
     PlanetDef {
@@ -93,7 +93,10 @@ pub static PLANETS: [PlanetDef; 5] = [
         phase: 5.4, inclination: -0.12, tilt: 0.3,
         material: Material::Ice { a: 0xBFE3F5, b: 0x6FA8D6, seed: 7.0 },
         gravity: 12.0, relief: 0.04,
-        props: &[PropDef { model: "cristal", count: 90, size: 0.8, zone: Zone::Anywhere, color: 0xE1F5FE }],
+        props: &[
+            PropDef { model: "hielo1", count: 15, size: 2.0, zone: Zone::Anywhere, color: 0xE1F5FE },
+            PropDef { model: "hielo2", count: 15, size: 2.0, zone: Zone::Anywhere, color: 0xE1F5FE },
+        ],
     },
     PlanetDef {
         name: "NEBULA", radius: 17.0, orbit_radius: 520.0, orbit_period: 220.0, spin_period: 18.0,
