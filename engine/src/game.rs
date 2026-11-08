@@ -13,7 +13,7 @@ use crate::{
     raster::{self, draw_mesh},
     remote::{RemotePlayer, RemoteShip, NAME_LEN},
     rng::Rng,
-    scenario::{self, Gate, GATE_COUNT, PLANETS, PROPS_SEED, SUN_GRAVITY, SUN_RADIUS},
+    scenario::{self, Gate, BLACK_HOLES, GATE_COUNT, PLANETS, PROPS_SEED, SUN_GRAVITY, SUN_RADIUS, UFOS},
     shaders::{Material, Scene},
     terrain, Framebuffer, Mat4, Mesh, Ship, Vec3,
 };
@@ -40,6 +40,9 @@ const AVISO_S: f32 = 2.0;
 const CAPTURA_RADIOS: f32 = 5.0;
 /// Los objetos de superficie se dibujan a menos de esta distancia (en radios del planeta).
 const PROPS_DISTANCIA: f32 = 14.0;
+/// Altura sobre la nave rival a la que se dibuja su nombre, y distancia máxima a la que se ve.
+const NOMBRE_ALTURA: f32 = 2.3;
+const NOMBRE_DISTANCIA: f32 = 800.0;
 /// Los objetos de superficie chocan como esferas de este radio (fracción de su tamaño).
 const PROP_COLISION: f32 = 0.5;
 /// Altura sobre la superficie hasta la que puede haber objetos con los que chocar.
@@ -151,6 +154,10 @@ pub struct Game {
     /// Malla del meteorito de cada planeta (radio 1) y de sus anillos (radio exterior 1).
     meteor_meshes: Vec<Option<Mesh>>,
     ring_meshes: Vec<Option<Mesh>>,
+    /// Malla de cada agujero negro
+    hole_meshes: Vec<Mesh>,
+    /// Malla de cada ovni
+    ufo_meshes: Vec<Mesh>,
     props_seed: u64,
     gravity_on: bool,
     view: ViewMode,
@@ -249,6 +256,15 @@ impl Game {
             .map(|p| p.meteors.as_ref().map(|m| modelo_aparte(m.model).unwrap_or_else(|| procedural::icosphere(1))))
             .collect();
         let ring_meshes = PLANETS.iter().map(|p| p.rings.as_ref().and_then(|r| modelo_aparte(r.model))).collect();
+        let ufo_meshes = UFOS
+            .iter()
+            .map(|u| {
+                let mut mesh = assets::PROPS.iter().find(|(n, _)| *n == u.model).and_then(|(_, b)| obj::parse(b).ok()).unwrap_or_else(|| procedural::icosphere(2));
+                mesh.recompute_normals();
+                mesh
+            })
+            .collect();
+        let hole_meshes = BLACK_HOLES.iter().map(|h| modelo_aparte(h.model).unwrap_or_else(|| procedural::torus(1.0, 0.2, 28, 8))).collect();
 
         let mut game = Self {
             time: 0.0,
@@ -279,6 +295,8 @@ impl Game {
             placements: Vec::new(),
             meteor_meshes,
             ring_meshes,
+            hole_meshes,
+            ufo_meshes,
             props_seed: PROPS_SEED,
             gravity_on: true,
             view: ViewMode::ThirdPerson,
@@ -348,6 +366,50 @@ impl Game {
             .collect()
     }
 
+    /// El núcleo de cada agujero negro es una esfera para que la nave colisione
+    fn collide_holes(&mut self, dt: f32) {
+        let mut golpes = Vec::new();
+        for h in BLACK_HOLES.iter() {
+            let radio = h.core_radius();
+            if self.ship.position.distance(h.position) > radio + NAVE_RADIO + 1.0 {
+                continue;
+            }
+            let choque = physics::collide(&mut self.ship.position, &mut self.ship.velocity, NAVE_RADIO, h.position, Vec3::ZERO, radio, dt);
+            if let Some(c) = choque.filter(|c| c.impact_speed > IMPACTO_MIN) {
+                golpes.push(c);
+            }
+        }
+        for c in golpes {
+            self.registrar_choque("AGUJERO NEGRO", None, c);
+        }
+    }
+
+    /// El ovni es una esfera sólida 
+    fn collide_ufos(&mut self, dt: f32) {
+        let t = self.world_time;
+        let mut golpes = Vec::new();
+        for u in UFOS.iter() {
+            let (centro, radio) = (scenario::ufo_position(u, t), u.size);
+            if self.ship.position.distance(centro) > radio + NAVE_RADIO + 1.0 {
+                continue;
+            }
+            let choque = physics::collide(&mut self.ship.position, &mut self.ship.velocity, NAVE_RADIO, centro, scenario::ufo_velocity(u, t), radio, dt);
+            if let Some(c) = choque.filter(|c| c.impact_speed > IMPACTO_MIN) {
+                golpes.push(c);
+            }
+        }
+        for c in golpes {
+            self.registrar_choque("OVNI", None, c);
+        }
+    }
+
+    /// Todo lo que atrae a la nave: el sol, los planetas y los agujeros negros
+    fn gravity_sources(&self) -> Vec<Body> {
+        let mut fuentes = self.bodies();
+        fuentes.extend(BLACK_HOLES.iter().map(|h| Body { center: h.position, radius: h.radius, surface_gravity: h.gravity, velocity: Vec3::ZERO }));
+        fuentes
+    }
+
     /// Radio de la superficie del cuerpo `i` en la dirección del punto `p`: tiene en cuenta el
     /// relieve y que el planeta está girando.
     fn surface_at(&self, i: usize, b: &Body, p: Vec3) -> f32 {
@@ -371,6 +433,8 @@ impl Game {
         // Primero los objetos y al final el cuerpo: así empujar la nave fuera de un árbol nunca la deja dentro del suelo.
         self.collide_props(dt);
         self.collide_meteors(dt);
+        self.collide_holes(dt);
+        self.collide_ufos(dt);
         for (i, b) in self.bodies().iter().enumerate() {
             let surface = self.surface_at(i, b, self.ship.position);
             let choque = physics::collide(&mut self.ship.position, &mut self.ship.velocity, NAVE_RADIO, b.center, b.velocity, surface, dt);
@@ -560,7 +624,7 @@ impl Game {
             None => {
                 let ctrl = if quieta { Input::default() } else { *input };
                 if self.gravity_on && !quieta {
-                    self.ship.velocity += physics::gravity_at(self.ship.position, &self.bodies()) * dt;
+                    self.ship.velocity += physics::gravity_at(self.ship.position, &self.gravity_sources()) * dt;
                 }
                 self.ship.update(&ctrl, dt);
                 if !quieta {
@@ -824,6 +888,28 @@ impl Game {
             }
         }
 
+        // Agujeros negros
+        for (mesh, h) in self.hole_meshes.iter().zip(BLACK_HOLES.iter()) {
+            let k = h.radius;
+            let base = Mat4::translation(h.position) * Mat4::rotation_z(h.tilt) * Mat4::rotation_y(h.spin * t as f32);
+            for cara in [Mat4::scale(Vec3::new(k, k, k)), Mat4::rotation_x(PI) * Mat4::scale(Vec3::new(k, k, k))] {
+                self.draw_object(fb, &v, &mut st, mesh, &(base * cara), h.position, k, &Material::BlackHole);
+            }
+            // Núcleo: una esfera negra
+            let r = h.core_radius();
+            let nucleo = &self.spheres[Self::lod_index(h.position.distance(eye), r, v.focal)];
+            self.draw_object(fb, &v, &mut st, nucleo, &(Mat4::translation(h.position) * Mat4::scale(Vec3::new(r, r, r))), h.position, r, &Material::Emissive { color: 0x000000 });
+        }
+
+        // Ovnis se mueve en circulos, inclinados y girando
+        for (mesh, u) in self.ufo_meshes.iter().zip(UFOS.iter()) {
+            let a = (2.0 * std::f64::consts::PI * t / u.period as f64) as f32;
+            let centro = scenario::ufo_position(u, t);
+            let rumbo = Mat4::rotation_y(-a) * Mat4::rotation_z(0.25);
+            let model = Mat4::translation(centro) * rumbo * Mat4::scale(Vec3::new(u.size, u.size, u.size));
+            self.draw_object(fb, &v, &mut st, mesh, &model, centro, u.size * 1.1, &Material::Ufo);
+        }
+
         // Puntos de control (en carrera se ven los que faltan; el siguiente resalta)
         let racing = matches!(self.race.phase, Phase::Racing | Phase::Countdown);
         let desde = if racing { self.progress } else { 0 };
@@ -911,6 +997,21 @@ impl Game {
                 if dist < 1500.0 && r < h / 4 && en_pantalla && !tapado(fb, &v.vp, v.eye, pos, radius, x, y) {
                     hud::centered(fb, x as i32, (y as i32 - r - 2 * line).max(m), s, color, name);
                     hud::centered(fb, x as i32, (y as i32 - r - line).max(m + line), s, 0x78909C, &format!("{dist:.0} M"));
+                }
+            }
+        }
+
+        // Nombre de cada rival sobre su nave, con el color con el que sale en la tabla de carrera.
+        for r in &self.remotes {
+            let arriba = r.shown.position + Vec3::new(0.0, NOMBRE_ALTURA, 0.0);
+            if r.shown.position.distance(v.eye) > NOMBRE_DISTANCIA {
+                continue;
+            }
+            if let Some((x, y, _)) = raster::project(&v.vp, arriba, fb.width, fb.height) {
+                let en_pantalla = x > 0.0 && x < w as f32 && y > 0.0 && y < h as f32;
+                if en_pantalla && !tapado(fb, &v.vp, v.eye, arriba, 0.0, x, y) {
+                    let nombre = nombre_mostrado(&r.shown.name, format!("J{}", r.shown.id));
+                    hud::centered(fb, x as i32, y as i32 - 8 * s as i32, s, color_jugador(r.shown.id), &nombre);
                 }
             }
         }
@@ -1262,6 +1363,90 @@ mod tests {
         g.set_remote_players(&[RemoteShip { position: adelante + Vec3::new(3.0, 0.0, 0.0), ..rival(3, 0.0) }]);
         g.render(&mut con);
         assert_ne!(sin.pixels, con.pixels);
+    }
+
+    #[test]
+    fn la_nave_no_atraviesa_el_nucleo_de_un_agujero_negro_y_avisa_el_choque() {
+        let mut g = jugando();
+        let h = &BLACK_HOLES[0];
+        let radio = h.core_radius();
+        poner(&mut g, h.position + Vec3::new(radio + NAVE_RADIO - 0.2, 0.0, 0.0));
+        g.ship.velocity = Vec3::new(-30.0, 0.0, 0.0);
+        g.collide_holes(0.016);
+        assert!(g.ship.position.distance(h.position) >= radio + NAVE_RADIO - 1e-3);
+        assert!(g.take_collisions().iter().any(|c| c.body == "AGUJERO NEGRO" && c.object.is_none()));
+    }
+
+    #[test]
+    fn el_ovni_patrulla_en_circulo_y_la_nave_no_lo_atraviesa() {
+        let mut g = jugando();
+        let u = &UFOS[0];
+        assert_eq!(g.ufo_meshes.len(), UFOS.len());
+        let (a, b) = (scenario::ufo_position(u, 0.0), scenario::ufo_position(u, 10.0));
+        assert!(a != b, "se mueve");
+        let horizontal = |p: Vec3| ((p.x - u.center.x).powi(2) + (p.z - u.center.z).powi(2)).sqrt();
+        assert!((horizontal(a) - u.orbit).abs() < 1e-2 && (horizontal(b) - u.orbit).abs() < 1e-2, "vuelta circular");
+        let t = g.world_time;
+        let centro = scenario::ufo_position(u, t);
+        poner(&mut g, centro + Vec3::new(u.size + NAVE_RADIO - 0.2, 0.0, 0.0));
+        g.ship.velocity = scenario::ufo_velocity(u, t) - Vec3::new(30.0, 0.0, 0.0);
+        g.collide_ufos(0.016);
+        assert!(g.ship.position.distance(centro) >= u.size + NAVE_RADIO - 1e-3);
+        assert!(g.take_collisions().iter().any(|c| c.body == "OVNI"));
+    }
+
+    #[test]
+    fn los_agujeros_negros_atraen_a_la_nave_mas_fuerte_de_lo_que_ella_empuja() {
+        let g = jugando();
+        for h in BLACK_HOLES.iter() {
+            let p = h.position + Vec3::new(h.radius * 1.5, 0.0, 0.0);
+            let a = physics::gravity_at(p, &g.gravity_sources());
+            assert!(a.length() > crate::ship::EMPUJE, "cerca del disco la nave no puede escapar empujando: {}", a.length());
+            assert!(a.x < 0.0, "apunta hacia el agujero negro");
+            // Lejos, la atracción es mucho menor (cae con el cuadrado de la distancia).
+            let lejos = physics::gravity_at(h.position + Vec3::new(h.radius * 12.0, 0.0, 0.0), &g.gravity_sources());
+            assert!(lejos.length() < crate::ship::EMPUJE);
+        }
+        // Los índices de los cuerpos con los que se choca no cambian.
+        assert_eq!(g.bodies().len(), 1 + PLANETS.len());
+        assert_eq!(g.gravity_sources().len(), 1 + PLANETS.len() + BLACK_HOLES.len());
+    }
+
+    #[test]
+    fn el_agujero_negro_se_ve_cuando_se_mira_hacia_el_y_deja_pasar_el_fondo() {
+        let mut g = jugando();
+        let h = &BLACK_HOLES[0];
+        assert_eq!(g.hole_meshes.len(), BLACK_HOLES.len());
+        let (mut lejos, mut cerca) = (Framebuffer::new(320, 240), Framebuffer::new(320, 240));
+        g.render(&mut lejos);
+        // Ponemos la nave frente al disco, mirando hacia él.
+        let (yaw, pitch) = scenario::orientation(Vec3::new(0.0, 0.0, -1.0));
+        g.ship.reset(h.position + Vec3::new(0.0, 8.0, h.radius * 2.5), yaw, pitch);
+        g.camera = ChaseCamera::new(&g.ship);
+        g.render(&mut cerca);
+        assert_ne!(lejos.pixels, cerca.pixels);
+        // Hay píxeles brillantes de las grietas y los puntos: más claros que el fondo del espacio.
+        let claros = cerca.pixels.iter().filter(|&&p| (p >> 16) > 0x90 && (p & 0xFF) > 0x70).count();
+        assert!(claros > 0, "el disco tiene que mostrar algo brillante");
+    }
+
+    #[test]
+    fn el_nombre_del_rival_se_dibuja_sobre_su_nave_y_cambia_con_el_nombre() {
+        let nombre = |t: &[u8]| {
+            let mut n = [0; NAME_LEN];
+            n[..t.len()].copy_from_slice(t);
+            n
+        };
+        let dibujar = |t: &[u8]| {
+            let mut g = jugando();
+            let pos = g.ship.position + g.ship.forward() * 30.0;
+            g.set_remote_players(&[RemoteShip { position: pos, name: nombre(t), ..rival(3, 0.0) }]);
+            let mut fb = Framebuffer::new(640, 480);
+            g.render(&mut fb);
+            fb.pixels
+        };
+        // Misma nave en el mismo lugar: solo cambia el texto, así que la imagen cambia solo por el nombre.
+        assert_ne!(dibujar(b"ZORRO"), dibujar(b"LUNA"));
     }
 
     #[test]

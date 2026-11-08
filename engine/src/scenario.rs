@@ -57,6 +57,56 @@ pub struct RingsDef {
     pub colors: (u32, u32),
 }
 
+/// agujero negro usa el obj de anillos
+pub struct BlackHoleDef {
+    pub model: &'static str,
+    pub position: Vec3,
+    pub radius: f32,
+    /// Inclinación del disco (radianes).
+    pub tilt: f32,
+    pub spin: f32,
+    pub gravity: f32,
+}
+
+impl BlackHoleDef {
+    /// Radio del centro del agujero para que colisione la nave
+    pub fn core_radius(&self) -> f32 {
+        self.radius * 0.5
+    }
+}
+
+/// ovni
+pub struct UfoDef {
+    pub model: &'static str,
+    pub center: Vec3,
+    pub orbit: f32,
+    pub bob: f32,
+    /// Segundos por vuelta.
+    pub period: f32,
+    pub size: f32,
+}
+
+pub static UFOS: [UfoDef; 2] = [
+    UfoDef { model: "ovni", center: Vec3 { x: 60.0, y: 200.0, z: 300.0 }, orbit: 100.0, bob: 15.0, period: 40.0, size: 8.0 },
+    UfoDef { model: "ovni", center: Vec3 { x: -250.0, y: 190.0, z: -260.0 }, orbit: 80.0, bob: 12.0, period: -34.0, size: 8.0 },
+];
+
+pub fn ufo_position(u: &UfoDef, t: f64) -> Vec3 {
+    let a = (2.0 * std::f64::consts::PI * t / u.period as f64) as f32;
+    u.center + Vec3::new(a.cos() * u.orbit, (2.0 * a).sin() * u.bob, a.sin() * u.orbit)
+}
+
+pub fn ufo_velocity(u: &UfoDef, t: f64) -> Vec3 {
+    const H: f64 = 0.05;
+    (ufo_position(u, t + H) - ufo_position(u, t - H)) * (1.0 / (2.0 * H) as f32)
+}
+
+pub static BLACK_HOLES: [BlackHoleDef; 3] = [
+    BlackHoleDef { model: "anillos", position: Vec3 { x: 140.0, y: 250.0, z: -120.0 }, radius: 30.0, tilt: 0.45, spin: 0.15, gravity: 150.0 },
+    BlackHoleDef { model: "anillos", position: Vec3 { x: -420.0, y: -220.0, z: 160.0 }, radius: 38.0, tilt: -0.6, spin: -0.1, gravity: 150.0 },
+    BlackHoleDef { model: "anillos", position: Vec3 { x: 260.0, y: 190.0, z: 480.0 }, radius: 26.0, tilt: 0.9, spin: 0.2, gravity: 150.0 },
+];
+
 pub struct PlanetDef {
     pub name: &'static str,
     pub radius: f32,
