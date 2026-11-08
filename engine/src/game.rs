@@ -40,6 +40,10 @@ const AVISO_S: f32 = 2.0;
 const CAPTURA_RADIOS: f32 = 5.0;
 /// Los objetos de superficie se dibujan a menos de esta distancia (en radios del planeta).
 const PROPS_DISTANCIA: f32 = 14.0;
+/// Los objetos de superficie chocan como esferas de este radio (fracción de su tamaño).
+const PROP_COLISION: f32 = 0.5;
+/// Altura sobre la superficie hasta la que puede haber objetos con los que chocar.
+const PROPS_ALCANCE: f32 = 8.0;
 /// Giro de 180 grados y escala para el modelo, los modelos vienen normalizados a radio 1
 const AJUSTES_NAVE: &[(&str, bool, f32)] = &[("xwing", true, 2.0)];
 const ESCALA_NAVE: f32 = 1.2;
@@ -65,6 +69,8 @@ pub enum ViewMode {
 pub struct CollisionEvent {
     /// "SOL" o el nombre del planeta.
     pub body: &'static str,
+    /// Modelo del objeto de superficie contra el que chocó (`None` = chocó con el cuerpo mismo).
+    pub object: Option<&'static str>,
     /// Punto de la superficie donde chocó.
     pub position: Vec3,
     /// Hacia afuera de la superficie.
@@ -347,23 +353,56 @@ impl Game {
     }
 
     fn resolve_collisions(&mut self, dt: f32) {
+        // Primero los objetos y al final el cuerpo: así empujar la nave fuera de un árbol nunca la deja dentro del suelo.
+        self.collide_props(dt);
         for (i, b) in self.bodies().iter().enumerate() {
             let surface = self.surface_at(i, b, self.ship.position);
             let choque = physics::collide(&mut self.ship.position, &mut self.ship.velocity, NAVE_RADIO, b.center, b.velocity, surface, dt);
             if let Some(c) = choque.filter(|c| c.impact_speed > IMPACTO_MIN) {
-                let body = body_name(i);
-                self.collisions.push(CollisionEvent {
-                    body,
-                    position: self.ship.position - c.normal * NAVE_RADIO,
-                    normal: c.normal,
-                    impact_speed: c.impact_speed,
-                });
-                if self.collisions.len() > 32 {
-                    self.collisions.remove(0); // nadie los está leyendo: no crecer sin límite
-                }
-                self.notice(format!("COLISION: {body}"), 0xEF5350);
+                self.registrar_choque(body_name(i), None, c);
             }
         }
+    }
+
+    /// Choques contra los objetos de superficie (árboles, rocas, edificios...). Cada uno es una
+    /// esfera a media altura y de radio la mitad de su tamaño; giran con el planeta.
+    fn collide_props(&mut self, dt: f32) {
+        let t = self.world_time;
+        let mut golpes = Vec::new();
+        for (i, p) in PLANETS.iter().enumerate() {
+            let pos = scenario::planet_position(p, t);
+            // Los objetos miden pocas unidades: lejos de la superficie no hay nada que revisar.
+            if self.ship.position.distance(pos) > scenario::max_radius(p) + PROPS_ALCANCE {
+                continue;
+            }
+            let planeta = Mat4::translation(pos) * scenario::planet_rotation(p, t);
+            let velocidad = scenario::planet_velocity(p, t);
+            for x in &self.placements[i] {
+                let centro = (planeta * x.local).transform_point3(Vec3::new(0.0, 0.5, 0.0));
+                let radio = x.size * PROP_COLISION;
+                let choque = physics::collide(&mut self.ship.position, &mut self.ship.velocity, NAVE_RADIO, centro, velocidad, radio, dt);
+                if let Some(c) = choque.filter(|c| c.impact_speed > IMPACTO_MIN) {
+                    golpes.push((p.name, p.props[x.kind].model, c));
+                }
+            }
+        }
+        for (body, objeto, c) in golpes {
+            self.registrar_choque(body, Some(objeto), c);
+        }
+    }
+
+    fn registrar_choque(&mut self, body: &'static str, object: Option<&'static str>, c: physics::Contact) {
+        self.collisions.push(CollisionEvent {
+            body,
+            object,
+            position: self.ship.position - c.normal * NAVE_RADIO,
+            normal: c.normal,
+            impact_speed: c.impact_speed,
+        });
+        if self.collisions.len() > 32 {
+            self.collisions.remove(0); // nadie los está leyendo: no crecer sin límite
+        }
+        self.notice(format!("COLISION: {}", object.unwrap_or(body)), 0xEF5350);
     }
 
     fn toggle_orbit(&mut self) {
@@ -1425,6 +1464,26 @@ mod tests {
         let choques = g.take_collisions();
         assert!(choques.iter().any(|c| c.body == "SOL" && c.impact_speed > 10.0), "{choques:?}");
         assert!(g.take_collisions().is_empty(), "se entregan una sola vez");
+    }
+
+    #[test]
+    fn la_nave_no_atraviesa_un_objeto_de_superficie_y_avisa_el_choque() {
+        let mut g = jugando();
+        let i = PLANETS.iter().position(|p| p.name == "AQUA").unwrap();
+        let p = &PLANETS[i];
+        let x = g.placements[i][0];
+        let t = g.world_time;
+        let planeta = Mat4::translation(scenario::planet_position(p, t)) * scenario::planet_rotation(p, t);
+        let centro = (planeta * x.local).transform_point3(Vec3::new(0.0, 0.5, 0.0));
+        let radio = x.size * PROP_COLISION;
+        let arriba = (planeta * x.local).transform_dir(Vec3::Y).normalize();
+        poner(&mut g, centro + arriba * (radio + NAVE_RADIO - 0.2));
+        g.ship.velocity = scenario::planet_velocity(p, t) - arriba * 20.0;
+        g.collide_props(0.016);
+        assert!(g.ship.position.distance(centro) >= radio + NAVE_RADIO - 1e-3, "la nave sale del objeto");
+        let choques = g.take_collisions();
+        let modelo = p.props[x.kind].model;
+        assert!(choques.iter().any(|c| c.body == "AQUA" && c.object == Some(modelo)), "{choques:?}");
     }
 
     #[test]
