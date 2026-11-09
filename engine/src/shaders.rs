@@ -37,6 +37,16 @@ pub enum Material {
     Gas { a: u32, b: u32, seed: f32 },
     /// Hielo con grietas.
     Ice { a: u32, b: u32, seed: f32 },
+    /// Anillos con bandas, huecos y ruido fino. Donde son poco densos el píxel se descarta
+    Ring { a: u32, b: u32 },
+    /// Disco oscuro con grietas brillantes moradas y rosadas. Como los anillos,
+    /// descarta píxeles en los bordes para verse irregular (ver `discards`).
+    BlackHole,
+    /// Platillo: casco metálico con paneles, luces que corren por el borde, brillo de propulsión
+    /// abajo y cúpula de cristal verde. Espera el modelo `ovni.obj` sin normalizar.
+    Ufo,
+    /// Roca oscura con cráteres y grietas de lava que brillan
+    Meteor,
 }
 
 impl Material {
@@ -46,7 +56,10 @@ impl Material {
             Material::Flat { color } | Material::Emissive { color } | Material::Metal { color, .. } => color,
             Material::Sun => 0xFFC107,
             Material::Rocky { land, .. } => land,
-            Material::Gas { a, .. } | Material::Ice { a, .. } => a,
+            Material::Gas { a, .. } | Material::Ice { a, .. } | Material::Ring { a, .. } => a,
+            Material::Meteor => 0xD02A05,
+            Material::BlackHole => 0xAB47BC,
+            Material::Ufo => 0x7DFFB2,
         }
     }
 }
@@ -123,6 +136,39 @@ fn rim(normal: Vec3, view: Vec3, lit: f32) -> f32 {
     (1.0 - normal.dot(view).max(0.0)).powi(3) * (0.25 + lit)
 }
 
+/// Radio interior de los anillos (el exterior es 1).
+const RING_INNER: f32 = 0.565;
+
+/// Ruido fino y densidad de los anillos en la posición local `l` (el disco está en el plano XZ).
+fn ring_profile(l: Vec3) -> (f32, f32) {
+    let r = (l.x * l.x + l.z * l.z).sqrt();
+    let t = (r - RING_INNER) / (1.0 - RING_INNER);
+    let gap = smoothstep(0.52, 0.56, t) * (1.0 - smoothstep(0.62, 0.66, t));
+    let edge = smoothstep(0.0, 0.04, t) * (1.0 - smoothstep(0.96, 1.0, t));
+    let fine = fbm(Vec3::new(t * 60.0, 0.0, 0.0), 3);
+    (fine, edge * (1.0 - gap * 0.95) * (0.45 + 0.55 * fine))
+}
+
+/// Fuerza (0 a 1) de las grietas del agujero negro y posición radial `t` (0 en el borde interior,
+/// 1 en el exterior). Son espirales analíticas, sin ruido ni tiempo: baratas y sin parpadeo.
+/// El disco está en el plano XZ, con radio interior `RING_INNER` y exterior 1.
+fn hole_cracks(l: Vec3) -> (f32, f32) {
+    let r = (l.x * l.x + l.z * l.z).sqrt();
+    let t = ((r - RING_INNER) / (1.0 - RING_INNER)).clamp(0.0, 1.0);
+    let ang = l.z.atan2(l.x);
+    // Dos familias de espirales que giran en sentidos opuestos; las grietas están donde el seno cruza 0.
+    let a = (ang * 3.0 + t * 9.0).sin().abs();
+    let b = (ang * 5.0 - t * 14.0 + 1.3).sin().abs();
+    let crack = (1.0 - smoothstep(0.0, 0.16, a)).max(0.7 * (1.0 - smoothstep(0.0, 0.12, b)));
+    // Se desvanecen hacia los dos bordes del disco, así no hay un corte brusco.
+    (crack * smoothstep(0.0, 0.2, t) * (1.0 - smoothstep(0.7, 1.0, t)), t)
+}
+
+/// ¿Este píxel no se dibuja? Solo los huecos de los anillos: ahí se ve lo que hay detrás.
+pub fn discards(m: &Material, f: &Fragment) -> bool {
+    matches!(m, Material::Ring { .. }) && ring_profile(f.local).1 < 0.18
+}
+
 pub fn shade(m: &Material, f: &Fragment, s: &Scene) -> u32 {
     let n = f.normal.normalize();
     let lambert = n.dot((s.light_pos - f.world).normalize()).max(0.0);
@@ -177,6 +223,63 @@ pub fn shade(m: &Material, f: &Fragment, s: &Scene) -> u32 {
             let c = rgb(a).lerp(rgb(b), h) * (1.0 - 0.5 * crack);
             pack(c * (0.12 + 0.88 * lambert) + Vec3::new(0.6, 0.8, 1.0) * (rim(n, view, lambert) * 0.5))
         }
+        Material::Ring { a, b } => {
+            let (fine, density) = ring_profile(f.local);
+            let color = rgb(a).lerp(rgb(b), smoothstep(0.3, 0.7, fine)).lerp(rgb(0x3d3226), (1.0 - density) * 0.6);
+            // Se ven las dos caras: la luz cuenta igual venga de arriba o de abajo.
+            let luz = n.dot((s.light_pos - f.world).normalize()).abs();
+            pack(color * (0.25 + 0.75 * luz))
+        }
+        Material::BlackHole => {
+            // Sin ruido ni animación propia (el disco ya gira): el color solo depende del radio,
+            // de rosado en el borde interior a morado en el exterior, sin saltos ni parpadeo.
+            let (crack, t) = hole_cracks(f.local);
+            let base = rgb(0x07030f).lerp(rgb(0x1f0838), 1.0 - t);
+            let luz = rgb(0xff4fa3).lerp(rgb(0x8e24aa), t);
+            let glow = crack * crack * (3.0 - 2.0 * crack);
+            // Brilla por sí solo: no depende de la luz del sol.
+            pack(base.lerp(luz, glow) + luz * (glow * glow * 0.25))
+        }
+        Material::Ufo => {
+            let q = f.local;
+            let t = s.time;
+            let r = (q.x * q.x + q.z * q.z).sqrt();
+            let ang = q.z.atan2(q.x);
+            // Casco metálico que se aclara hacia arriba, con la luz del sol.
+            let sheen = 0.4 + 0.6 * lambert;
+            let mut c = rgb(0x4a4f5e).lerp(rgb(0xaab2c6), (q.y * 3.0 + 0.5).clamp(0.0, 1.0)) * sheen;
+            // Paneles oscuros alrededor del casco.
+            let panel = 1.0 - smoothstep(0.0, 0.06, (ang * 12.0).sin().abs());
+            c = c.lerp(rgb(0x15181f) * sheen, panel * 0.7 * smoothstep(0.35, 0.6, r));
+            // Luces del borde que corren en círculo y brillo de propulsión abajo.
+            let borde = smoothstep(0.1, 0.0, q.y.abs()) * smoothstep(0.8, 0.92, r);
+            let corre = 0.5 + 0.5 * (ang * 8.0 - t * 4.0).sin();
+            c += rgb(0xffe45c) * (borde * corre * 1.2);
+            let empuje = smoothstep(0.45, 0.0, r) * smoothstep(-0.22, -0.3, q.y);
+            c += rgb(0x40ffd0) * (empuje * (0.7 + 0.3 * (t * 6.0).sin()));
+            // Cúpula de cristal verde con brillo en el borde.
+            let cupula = smoothstep(0.17, 0.22, q.y);
+            let fres = (1.0 - n.dot(view).max(0.0)).powi(2);
+            let cristal = rgb(0x0f6b48).lerp(rgb(0x7dffb2), fres) * (0.6 + 0.4 * sheen);
+            pack(c.lerp(cristal, cupula))
+        }
+        Material::Meteor => {
+            let q = f.local;
+            let t = s.time;
+            // Roca quemada con cráteres 
+            let rock = fbm(q * 4.0, 5);
+            let mut crust = rgb(0x1a1210).lerp(rgb(0x3b2a24), rock);
+            let cr = fbm(q * 3.5 + Vec3::new(1.7, 8.3, 2.9), 2);
+            crust = crust.lerp(rgb(0x0b0706), smoothstep(0.30, 0.22, cr) * 0.8);
+            crust = crust.lerp(rgb(0x5a4638), smoothstep(0.30, 0.34, cr) * smoothstep(0.40, 0.34, cr) * 0.6);
+            // Grietas de lava: donde el ruido cruza 0.5.
+            let h = fbm(q * 3.0 + Vec3::new(0.0, t * 0.03, 0.0), 5);
+            let vein = 1.0 - smoothstep(0.0, 0.07, (h - 0.5).abs());
+            let magma = rgb(0xd02a05).lerp(rgb(0xffc21f), smoothstep(0.4, 1.0, vein));
+            let pulse = 0.75 + 0.25 * (t * 1.5 + rock * 6.0).sin();
+            let lit = crust * (0.08 + 0.92 * lambert) * (1.0 - vein) + (crust.lerp(magma, vein) + magma * (vein * 0.35 * pulse)) * vein;
+            pack(lit + rgb(0xff4a12) * (rim(n, view, lambert) * 0.5))
+        }
     }
 }
 
@@ -207,6 +310,16 @@ mod tests {
         let p = Vec3::new(1.3, 2.7, 0.4);
         let q = p + Vec3::new(0.001, 0.0, 0.0);
         assert!((value_noise(p) - value_noise(q)).abs() < 0.01);
+    }
+
+    #[test]
+    fn los_anillos_dejan_huecos_y_solo_ellos_descartan_pixeles() {
+        let anillo = Material::Ring { a: 0xD8C49A, b: 0x8A7556 };
+        assert!(discards(&anillo, &frag(Vec3::new(0.3, 0.0, 0.0))));
+        assert!(discards(&anillo, &frag(Vec3::new(1.2, 0.0, 0.0))));
+        let dibujados = (0..100).filter(|&i| !discards(&anillo, &frag(Vec3::new(0.57 + i as f32 * 0.004, 0.0, 0.0)))).count();
+        assert!(dibujados > 20, "{dibujados}");
+        assert!(!discards(&Material::Meteor, &frag(Vec3::new(0.3, 0.0, 0.0))));
     }
 
     #[test]

@@ -38,6 +38,75 @@ pub struct PropDef {
     pub color: u32,
 }
 
+/// Meteoritos que dan vueltas alrededor del planeta, cada uno con su propia órbita y giro.
+pub struct MeteorsDef {
+    pub model: &'static str,
+    pub count: u32,
+    /// Radio medio de cada meteorito (varía de uno a otro).
+    pub size: f32,
+    /// Distancia media al centro del planeta.
+    pub distance: f32,
+    pub spread: f32,
+    pub period: f32,
+}
+
+/// Anillos alrededor del planeta
+pub struct RingsDef {
+    pub model: &'static str,
+    pub scale: f32,
+    pub colors: (u32, u32),
+}
+
+/// agujero negro usa el obj de anillos
+pub struct BlackHoleDef {
+    pub model: &'static str,
+    pub position: Vec3,
+    pub radius: f32,
+    /// Inclinación del disco (radianes).
+    pub tilt: f32,
+    pub spin: f32,
+    pub gravity: f32,
+}
+
+impl BlackHoleDef {
+    /// Radio del centro del agujero para que colisione la nave
+    pub fn core_radius(&self) -> f32 {
+        self.radius * 0.5
+    }
+}
+
+/// ovni
+pub struct UfoDef {
+    pub model: &'static str,
+    pub center: Vec3,
+    pub orbit: f32,
+    pub bob: f32,
+    /// Segundos por vuelta.
+    pub period: f32,
+    pub size: f32,
+}
+
+pub static UFOS: [UfoDef; 2] = [
+    UfoDef { model: "ovni", center: Vec3 { x: 60.0, y: 200.0, z: 300.0 }, orbit: 100.0, bob: 15.0, period: 40.0, size: 8.0 },
+    UfoDef { model: "ovni", center: Vec3 { x: -250.0, y: 190.0, z: -260.0 }, orbit: 80.0, bob: 12.0, period: -34.0, size: 8.0 },
+];
+
+pub fn ufo_position(u: &UfoDef, t: f64) -> Vec3 {
+    let a = (2.0 * std::f64::consts::PI * t / u.period as f64) as f32;
+    u.center + Vec3::new(a.cos() * u.orbit, (2.0 * a).sin() * u.bob, a.sin() * u.orbit)
+}
+
+pub fn ufo_velocity(u: &UfoDef, t: f64) -> Vec3 {
+    const H: f64 = 0.05;
+    (ufo_position(u, t + H) - ufo_position(u, t - H)) * (1.0 / (2.0 * H) as f32)
+}
+
+pub static BLACK_HOLES: [BlackHoleDef; 3] = [
+    BlackHoleDef { model: "anillos", position: Vec3 { x: 140.0, y: 250.0, z: -120.0 }, radius: 30.0, tilt: 0.45, spin: 0.15, gravity: 150.0 },
+    BlackHoleDef { model: "anillos", position: Vec3 { x: -420.0, y: -220.0, z: 160.0 }, radius: 38.0, tilt: -0.6, spin: -0.1, gravity: 150.0 },
+    BlackHoleDef { model: "anillos", position: Vec3 { x: 260.0, y: 190.0, z: 480.0 }, radius: 26.0, tilt: 0.9, spin: 0.2, gravity: 150.0 },
+];
+
 pub struct PlanetDef {
     pub name: &'static str,
     pub radius: f32,
@@ -59,6 +128,8 @@ pub struct PlanetDef {
     pub relief: f32,
     /// Objetos que se reparten sobre su superficie.
     pub props: &'static [PropDef],
+    pub meteors: Option<MeteorsDef>,
+    pub rings: Option<RingsDef>,
 }
 
 pub static PLANETS: [PlanetDef; 5] = [
@@ -68,9 +139,10 @@ pub static PLANETS: [PlanetDef; 5] = [
         material: Material::Rocky { sea: 0x5D4037, land: 0xA1522B, peak: 0xE0A070, seed: 11.0 },
         gravity: 10.0, relief: 0.06,
         props: &[
-            PropDef { model: "roca", count: 70, size: 0.5, zone: Zone::Anywhere, color: 0x6D4C41 },
-            PropDef { model: "edificio", count: 6, size: 1.2, zone: Zone::Land, color: 0xB0BEC5 },
+            PropDef { model: "roca", count: 25, size: 1.2, zone: Zone::Anywhere, color: 0x8D8D8D },
+            PropDef { model: "edificio", count: 4, size: 2.8, zone: Zone::Land, color: 0xB0BEC5 },
         ],
+        meteors: None, rings: None,
     },
     PlanetDef {
         name: "AQUA", radius: 10.0, orbit_radius: 190.0, orbit_period: 80.0, spin_period: 30.0,
@@ -78,28 +150,37 @@ pub static PLANETS: [PlanetDef; 5] = [
         material: Material::Rocky { sea: 0x1E5FB8, land: 0x3E8E41, peak: 0x8D7B68, seed: 4.0 },
         gravity: 14.0, relief: 0.05,
         props: &[
-            PropDef { model: "arbol", count: 140, size: 0.7, zone: Zone::Land, color: 0x2E7D32 },
-            PropDef { model: "roca", count: 40, size: 0.5, zone: Zone::High, color: 0x8D8D8D },
+            PropDef { model: "arbol", count: 50, size: 2.4, zone: Zone::Land, color: 0x2E7D32 },
+            PropDef { model: "roca", count: 15, size: 1.2, zone: Zone::High, color: 0x8D8D8D },
         ],
+        meteors: None, rings: None,
     },
     PlanetDef {
         name: "TITAN", radius: 24.0, orbit_radius: 320.0, orbit_period: 130.0, spin_period: 25.0,
-        phase: 4.0, inclination: 0.1, tilt: 0.05,
+        phase: 4.0, inclination: 0.1, tilt: 0.35,
         material: Material::Gas { a: 0xD9A066, b: 0x8C5A3C, seed: 2.0 },
         gravity: 22.0, relief: 0.0, props: &[],
+        meteors: None,
+        rings: Some(RingsDef { model: "anillos", scale: 2.3, colors: (0xD8C49A, 0x8A7556) }),
     },
     PlanetDef {
         name: "GLACIA", radius: 11.0, orbit_radius: 430.0, orbit_period: 170.0, spin_period: 40.0,
         phase: 5.4, inclination: -0.12, tilt: 0.3,
         material: Material::Ice { a: 0xBFE3F5, b: 0x6FA8D6, seed: 7.0 },
         gravity: 12.0, relief: 0.04,
-        props: &[PropDef { model: "cristal", count: 90, size: 0.8, zone: Zone::Anywhere, color: 0xE1F5FE }],
+        props: &[
+            PropDef { model: "hielo1", count: 15, size: 2.0, zone: Zone::Anywhere, color: 0xE1F5FE },
+            PropDef { model: "hielo2", count: 15, size: 2.0, zone: Zone::Anywhere, color: 0xE1F5FE },
+        ],
+        meteors: None, rings: None,
     },
     PlanetDef {
         name: "NEBULA", radius: 17.0, orbit_radius: 520.0, orbit_period: 220.0, spin_period: 18.0,
         phase: 1.2, inclination: 0.15, tilt: 0.2,
         material: Material::Gas { a: 0x9C6FD6, b: 0x4FC3C8, seed: 9.0 },
         gravity: 18.0, relief: 0.0, props: &[],
+        meteors: Some(MeteorsDef { model: "meteorito", count: 8, size: 3.0, distance: 45.0, spread: 14.0, period: 30.0 }),
+        rings: None,
     },
 ];
 
@@ -108,6 +189,46 @@ pub static PLANETS: [PlanetDef; 5] = [
 pub fn planet_position(p: &PlanetDef, t: f64) -> Vec3 {
     let a = p.phase + (2.0 * std::f64::consts::PI * t / p.orbit_period as f64) as f32;
     Vec3::new(a.cos() * p.orbit_radius, a.sin() * p.orbit_radius * p.inclination.sin(), a.sin() * p.orbit_radius * p.inclination.cos())
+}
+
+/// La órbita y el giro de un meteorito.
+#[derive(Clone, Copy, Debug)]
+pub struct Meteor {
+    pub size: f32,
+    pub distance: f32,
+    /// Segundos por vuelta alrededor del planeta.
+    pub period: f32,
+    pub phase: f32,
+    /// Inclinación del plano de la órbita y giro de ese plano sobre el eje Y (radianes).
+    pub inclination: f32,
+    pub node: f32,
+    /// Giro sobre sí mismo (rad/s).
+    pub spin: f32,
+}
+
+pub fn meteor(m: &MeteorsDef, k: u32) -> Meteor {
+    let mut rng = crate::rng::Rng::new(0x4D45_5445_4F52 ^ (k as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    Meteor {
+        size: m.size * rng.range(0.6, 1.4),
+        distance: m.distance + rng.range(-m.spread, m.spread),
+        period: m.period * rng.range(0.8, 1.25),
+        phase: rng.range(0.0, 2.0 * PI),
+        inclination: rng.range(-0.5, 0.5),
+        node: rng.range(0.0, 2.0 * PI),
+        spin: rng.range(0.2, 0.9),
+    }
+}
+
+pub fn meteor_position(p: &PlanetDef, m: &MeteorsDef, k: u32, t: f64) -> Vec3 {
+    let o = meteor(m, k);
+    let a = o.phase + (2.0 * std::f64::consts::PI * t / o.period as f64) as f32;
+    let plano = crate::Mat4::rotation_y(o.node) * crate::Mat4::rotation_x(o.inclination);
+    planet_position(p, t) + plano.transform_dir(Vec3::new(a.cos() * o.distance, 0.0, a.sin() * o.distance))
+}
+
+pub fn meteor_velocity(p: &PlanetDef, m: &MeteorsDef, k: u32, t: f64) -> Vec3 {
+    const H: f64 = 0.05;
+    (meteor_position(p, m, k, t + H) - meteor_position(p, m, k, t - H)) * (1.0 / (2.0 * H) as f32)
 }
 
 /// Velocidad del planeta en su órbita (u/s) en el instante `t`.
