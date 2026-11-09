@@ -76,6 +76,21 @@ impl App {
         }
     }
 
+    /// Choques desde la última llamada, para los efectos de sonido: pares `[tipo, velocidad]`
+    /// con tipo 1 = agujero negro y 0 = cualquier otro choque.
+    pub fn take_sound_events(&mut self) -> Vec<f32> {
+        self.game
+            .take_collisions()
+            .iter()
+            .flat_map(|c| [if c.body == "AGUJERO NEGRO" { 1.0 } else { 0.0 }, c.impact_speed])
+            .collect()
+    }
+
+    /// Aros cruzados desde la última llamada.
+    pub fn take_gates_passed(&mut self) -> u32 {
+        self.game.take_gates_passed()
+    }
+
     /// Siguiente mensaje que JS debe enviar por el WebSocket (vacío si no hay más).
     pub fn take_outgoing(&mut self) -> Vec<u8> {
         self.outgoing.pop_front().unwrap_or_default()

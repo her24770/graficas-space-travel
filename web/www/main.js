@@ -47,6 +47,72 @@ addEventListener("keyup", (e) => {
 addEventListener("blur", () => { presionadas = 0; });
 canvas.addEventListener("dblclick", pantallaCompleta);
 
+// Sonido indica cuando hay colision y se reproduce con Web Audio.
+const VOLUMEN_MUSICA = 0.15;
+const VOLUMEN_MOTOR = 0.5;
+const FACTOR_EXPLOSION = 0.5; //fuerza sonido de la explosion
+const ENFRIAMIENTO = 0.15; // s entre choques
+const CONTACTO_NUEVO = 0.5;
+const audio = { ctx: null, buffers: {}, motor: null, ultimoChoque: -Infinity, ultimoAgujero: -Infinity };
+
+async function cargarSonido(nombre) {
+  try {
+    const r = await fetch(`./sound/${nombre}.ogg`);
+    if (!r.ok) return;
+    audio.buffers[nombre] = await audio.ctx.decodeAudioData(await r.arrayBuffer());
+  } catch {}
+}
+
+function reproducir(nombre, volumen, bucle = false) {
+  const buffer = audio.buffers[nombre];
+  if (!buffer) return null;
+  const src = audio.ctx.createBufferSource();
+  const gain = audio.ctx.createGain();
+  src.buffer = buffer;
+  src.loop = bucle;
+  gain.gain.value = volumen;
+  src.connect(gain).connect(audio.ctx.destination);
+  src.start();
+  return src;
+}
+
+async function iniciarAudio() {
+  if (audio.ctx) { audio.ctx.resume?.(); return; }
+  try {
+    audio.ctx = new AudioContext();
+    await Promise.all(["background", "motor", "explosion", "blackhole", "point"].map(cargarSonido));
+    reproducir("background", VOLUMEN_MUSICA, true);
+  } catch { audio.ctx = null; }
+}
+addEventListener("keydown", iniciarAudio);
+addEventListener("pointerdown", iniciarAudio);
+
+function actualizarAudio(avanzando, eventos, aros) {
+  if (!audio.ctx) return;
+  if (aros > 0) reproducir("point", 0.8);
+  const ahora = audio.ctx.currentTime;
+  // Motor: suena mientras se mantiene W y se corta al soltarla.
+  if (avanzando && !audio.motor) {
+    audio.motor = reproducir("motor", VOLUMEN_MOTOR, true);
+  } else if (!avanzando && audio.motor) {
+    audio.motor.stop();
+    audio.motor = null;
+  }
+  for (let i = 0; i < eventos.length; i += 2) {
+    const agujero = eventos[i] === 1;
+    if (agujero) {
+      // Un solo sonido por contacto: la gravedad lo repite en cada cuadro.
+      const nuevo = ahora - audio.ultimoAgujero > CONTACTO_NUEVO;
+      audio.ultimoAgujero = ahora;
+      if (!nuevo) continue;
+    } else if (ahora - audio.ultimoChoque < ENFRIAMIENTO) {
+      continue;
+    }
+    reproducir(agujero ? "blackhole" : "explosion", Math.min(Math.max(eventos[i + 1] / 30, 0.3), 1) * (agujero ? 1 : FACTOR_EXPLOSION));
+    audio.ultimoChoque = ahora;
+  }
+}
+
 const wasm = await init({ module_or_path: "./pkg/web_bg.wasm?v=__VERSION__" });
 let [ancho, alto] = medidas();
 canvas.width = ancho;
@@ -90,6 +156,7 @@ function loop(now) {
   app.set_input(presionadas | unaVez);
   unaVez = 0;
   app.frame(dt);
+  actualizarAudio((presionadas & 1) !== 0 && !app.in_menu(), app.take_sound_events(), app.take_gates_passed());
   for (let m = app.take_outgoing(); m.length; m = app.take_outgoing()) {
     if (socket && socket.readyState === WebSocket.OPEN) socket.send(m);
   }
