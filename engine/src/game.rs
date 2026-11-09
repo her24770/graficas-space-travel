@@ -15,6 +15,7 @@ use crate::{
     rng::Rng,
     scenario::{self, Gate, BLACK_HOLES, GATE_COUNT, PLANETS, PROPS_SEED, SUN_GRAVITY, SUN_RADIUS, UFOS},
     shaders::{Material, Scene},
+    sparks::Sparks,
     terrain, Framebuffer, Mat4, Mesh, Ship, Vec3,
 };
 use std::f32::consts::PI;
@@ -163,6 +164,7 @@ pub struct Game {
     view: ViewMode,
     orbit: Option<Orbit>,
     collisions: Vec<CollisionEvent>,
+    sparks: Sparks,
     /// Aros cruzados
     gates_passed: u32,
     /// Aviso en pantalla: texto, color y hasta cuándo (segundos de `time`).
@@ -304,6 +306,7 @@ impl Game {
             view: ViewMode::ThirdPerson,
             orbit: None,
             collisions: Vec::new(),
+            sparks: Sparks::new(),
             gates_passed: 0,
             notice: None,
         };
@@ -501,6 +504,9 @@ impl Game {
     }
 
     fn registrar_choque(&mut self, body: &'static str, object: Option<&'static str>, c: physics::Contact) {
+        if body != "AGUJERO NEGRO" {
+            self.sparks.burst(self.ship.position - c.normal * NAVE_RADIO, c.normal, c.body_velocity, c.impact_speed);
+        }
         self.collisions.push(CollisionEvent {
             body,
             object,
@@ -566,6 +572,7 @@ impl Game {
         let dt = dt.clamp(0.0, DT_MAX);
         self.time += dt;
         self.world_time += dt as f64;
+        self.sparks.update(dt);
         let before = std::mem::replace(&mut self.prev_input, *input);
         let pressed = |now: bool, was: bool| now && !was;
 
@@ -956,6 +963,7 @@ impl Game {
                 let material = self.material_nave(self.selected, COLOR_PROPIO, self.my_id);
                 self.draw_object(fb, &v, &mut st, mesh, &model, self.ship.position, escala, &material);
             }
+            self.sparks.draw(fb, &v.vp);
             self.draw_hud(fb, &v, &st);
         }
         st

@@ -37,6 +37,8 @@ pub struct Contact {
     pub normal: Vec3,
     /// Velocidad con la que se acercaba a la superficie (0 si ya se alejaba).
     pub impact_speed: f32,
+    /// Velocidad del cuerpo contra el que se choco para mostrar las chispas juntas
+    pub body_velocity: Vec3,
 }
 
 /// Choque de una esfera (la nave) contra la superficie de un cuerpo.
@@ -69,7 +71,7 @@ pub fn collide(
     let tangencial = (relativa - normal * vn) * (-ROCE * dt).exp();
     let normal_nueva = if vn < 0.0 { -vn * REBOTE } else { vn };
     *vel = body_velocity + normal * normal_nueva + tangencial;
-    Some(Contact { normal, impact_speed: (-vn).max(0.0) })
+    Some(Contact { normal, impact_speed: (-vn).max(0.0), body_velocity })
 }
 
 #[cfg(test)]
