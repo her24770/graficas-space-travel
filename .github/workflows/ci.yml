@@ -13,6 +13,7 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - run: cargo build --workspace
       - run: cargo test --workspace
       - run: cargo build -p web --target wasm32-unknown-unknown

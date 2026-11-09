@@ -2,6 +2,7 @@
 use crate::Vec3;
 use std::f32::consts::PI;
 pub const NAME_LEN: usize = 6;
+pub const ELIMINADO: u8 = 0x80;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RemoteShip {

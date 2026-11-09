@@ -21,6 +21,7 @@ pub mod rng;
 pub mod scenario;
 pub mod shaders;
 pub mod ship;
+pub mod sparks;
 pub mod terrain;
 
 pub use framebuffer::Framebuffer;

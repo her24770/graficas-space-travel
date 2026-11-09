@@ -12,6 +12,7 @@ COPY . .
 RUN cargo build -p web --release --target wasm32-unknown-unknown \
     && wasm-bindgen --target web --out-dir /out/pkg target/wasm32-unknown-unknown/release/web.wasm \
     && cp web/www/* /out/ \
+    && cp -r assets/sound /out/sound \
     && sed -i 's/__VERSION__/dev/g' /out/index.html /out/main.js
 
 FROM nginx:alpine
