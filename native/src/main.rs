@@ -1,3 +1,5 @@
+mod sound;
+
 use engine::{input::bits, Framebuffer, Game, Input};
 use minifb::{Key, KeyRepeat, ScaleMode, Window, WindowOptions};
 use std::time::Instant;
@@ -31,6 +33,7 @@ fn main() {
     let (w, h) = medidas(window.get_size());
     let mut fb = Framebuffer::new(w, h);
     let mut game = Game::new(1);
+    let mut sonidos = sound::Sonidos::new();
 
     let mut last = Instant::now();
     let mut frame = 0u32;
@@ -69,6 +72,10 @@ fn main() {
         }
 
         game.update(dt, &Input::from_bits(b));
+        let choques = game.take_collisions();
+        if let Some(s) = sonidos.as_mut() {
+            s.actualizar(dt, game.screen() == engine::Screen::Playing && b & bits::FORWARD != 0, &choques, game.take_gates_passed());
+        }
         game.render(&mut fb);
         window
             .update_with_buffer(&fb.pixels, fb.width, fb.height)

@@ -163,6 +163,8 @@ pub struct Game {
     view: ViewMode,
     orbit: Option<Orbit>,
     collisions: Vec<CollisionEvent>,
+    /// Aros cruzados
+    gates_passed: u32,
     /// Aviso en pantalla: texto, color y hasta cuándo (segundos de `time`).
     notice: Option<(String, u32, f32)>,
 }
@@ -302,6 +304,7 @@ impl Game {
             view: ViewMode::ThirdPerson,
             orbit: None,
             collisions: Vec::new(),
+            gates_passed: 0,
             notice: None,
         };
         game.placements = Self::place_props(PROPS_SEED);
@@ -347,6 +350,10 @@ impl Game {
     /// Choques ocurridos desde la última llamada (para conectar efectos).
     pub fn take_collisions(&mut self) -> Vec<CollisionEvent> {
         std::mem::take(&mut self.collisions)
+    }
+
+    pub fn take_gates_passed(&mut self) -> u32 {
+        std::mem::take(&mut self.gates_passed)
     }
 
     fn notice(&mut self, text: String, color: u32) {
@@ -675,6 +682,7 @@ impl Game {
         let gate = self.course[self.progress];
         if self.ship.position.distance(gate.pos) < gate.radius {
             self.progress += 1;
+            self.gates_passed += 1;
             if self.progress == GATE_COUNT {
                 self.finish_time = Some(self.race.time);
                 if !self.online {
