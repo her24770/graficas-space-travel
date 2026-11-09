@@ -10,6 +10,8 @@ const VOLUMEN_MUSICA: f32 = 0.15;
 const VOLUMEN_MOTOR: f32 = 0.5;
 const FACTOR_EXPLOSION: f32 = 0.5;
 const VOLUMEN_PUNTO: f32 = 0.8;
+const VOLUMEN_AGUJERO: f32 = 0.9;
+const VOLUMEN_OVNI: f32 = 0.9;
 
 pub struct Sonidos {
     _stream: OutputStream,
@@ -17,8 +19,12 @@ pub struct Sonidos {
     explosion: Option<Vec<u8>>,
     punto: Option<Vec<u8>>,
     agujero: Option<Vec<u8>>,
+    ovni: Option<Vec<u8>>,
     motor: Option<Vec<u8>>,
     sink_motor: Option<Sink>,
+    /// Sonido en bucle mientras este cerca
+    sink_agujero: Option<Sink>,
+    sink_ovni: Option<Sink>,
     _musica: Option<Sink>,
     activos: Vec<Sink>,
     reloj: f32,
@@ -50,8 +56,11 @@ impl Sonidos {
             explosion: leer("explosion.ogg"),
             punto: leer("point.ogg"),
             agujero: leer("blackhole.ogg"),
+            ovni: leer("ovni.ogg"),
             motor: leer("motor.ogg"),
             sink_motor: None,
+            sink_agujero: None,
+            sink_ovni: None,
             _musica: musica,
             activos: Vec::new(),
             reloj: 0.0,
@@ -61,9 +70,13 @@ impl Sonidos {
     }
 
     /// `avanzando`: W presionada en la pantalla de juego.
-    pub fn actualizar(&mut self, dt: f32, avanzando: bool, choques: &[CollisionEvent], aros: u32) {
+    pub fn actualizar(&mut self, dt: f32, avanzando: bool, choques: &[CollisionEvent], aros: u32, cercania_agujero: f32, cercania_ovni: f32) {
         self.reloj += dt;
         self.activos.retain(|s| !s.empty());
+
+        // Sonido de cercania del agujero negro y ovni
+        Self::rumor(&self.handle, &mut self.sink_agujero, &self.agujero, cercania_agujero, VOLUMEN_AGUJERO);
+        Self::rumor(&self.handle, &mut self.sink_ovni, &self.ovni, cercania_ovni, VOLUMEN_OVNI);
 
         if aros > 0 {
             if let Some(sink) = self.punto.clone().and_then(|b| self.tocar(b, VOLUMEN_PUNTO)) {
@@ -82,7 +95,8 @@ impl Sonidos {
         }
 
         for c in choques {
-            if c.body == "AGUJERO NEGRO" {
+=            let anomalia = c.body == "AGUJERO NEGRO" || c.body == "OVNI";
+            if anomalia {
                 // Un solo sonido por contacto: mientras siga pegado no se repite.
                 let nuevo = self.reloj - self.ultimo_agujero > CONTACTO_NUEVO;
                 self.ultimo_agujero = self.reloj;
@@ -92,12 +106,37 @@ impl Sonidos {
             } else if self.reloj - self.ultimo_choque < ENFRIAMIENTO {
                 continue;
             }
-            let factor = if c.body == "AGUJERO NEGRO" { 1.0 } else { FACTOR_EXPLOSION };
-            let bytes = if c.body == "AGUJERO NEGRO" { &self.agujero } else { &self.explosion };
+            let factor = if anomalia { 1.0 } else { FACTOR_EXPLOSION };
+            let bytes = match c.body {
+                "AGUJERO NEGRO" => &self.agujero,
+                "OVNI" => &self.ovni,
+                _ => &self.explosion,
+            };
             if let Some(sink) = bytes.clone().and_then(|b| self.tocar(b, (c.impact_speed / 30.0).clamp(0.3, 1.0) * factor)) {
                 self.ultimo_choque = self.reloj;
                 self.activos.push(sink);
             }
+        }
+    }
+
+    ///Sonido al acercarse en bucle con volumen que sube al acercarse.
+    fn rumor(handle: &OutputStreamHandle, sink: &mut Option<Sink>, bytes: &Option<Vec<u8>>, cercania: f32, volumen: f32) {
+        if cercania <= 0.0 {
+            if let Some(s) = sink.take() {
+                s.stop();
+            }
+            return;
+        }
+        if sink.is_none() {
+            *sink = (|| {
+                let fuente = Decoder::new(Cursor::new(bytes.clone()?)).ok()?;
+                let s = Sink::try_new(handle).ok()?;
+                s.append(fuente.repeat_infinite());
+                Some(s)
+            })();
+        }
+        if let Some(s) = sink {
+            s.set_volume(cercania * cercania * volumen);
         }
     }
 

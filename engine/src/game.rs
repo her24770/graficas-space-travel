@@ -35,6 +35,9 @@ const LOD_NIVELES: [u32; 4] = [1, 2, 3, 4];
 const NAVE_RADIO: f32 = 1.0;
 /// Velocidad de impacto mínima para contar un choque (apoyarse en el suelo no cuenta).
 const IMPACTO_MIN: f32 = 1.0;
+/// Distancia de alcance de sonido
+const AGUJERO_ALCANCE: f32 = 160.0;
+const OVNI_ALCANCE: f32 = 100.0;
 /// Segundos que se muestra un aviso en pantalla.
 const AVISO_S: f32 = 2.0;
 /// Se puede entrar en órbita a menos de esta altura sobre la superficie (en radios del cuerpo).
@@ -350,6 +353,23 @@ impl Game {
         self.orbit.map(|o| o.body)
     }
 
+    /// cercania de agujero negro y ovni para el sonido 
+    pub fn black_hole_proximity(&self) -> f32 {
+        BLACK_HOLES
+            .iter()
+            .map(|h| 1.0 - (self.ship.position.distance(h.position) - h.core_radius()) / AGUJERO_ALCANCE)
+            .fold(0.0, f32::max)
+            .clamp(0.0, 1.0)
+    }
+
+    pub fn ufo_proximity(&self) -> f32 {
+        let t = self.world_time;
+        UFOS.iter()
+            .map(|u| 1.0 - (self.ship.position.distance(scenario::ufo_position(u, t)) - u.size) / OVNI_ALCANCE)
+            .fold(0.0, f32::max)
+            .clamp(0.0, 1.0)
+    }
+
     /// Choques ocurridos desde la última llamada (para conectar efectos).
     pub fn take_collisions(&mut self) -> Vec<CollisionEvent> {
         std::mem::take(&mut self.collisions)
@@ -413,10 +433,12 @@ impl Game {
         }
     }
 
-    /// Todo lo que atrae a la nave: el sol, los planetas y los agujeros negros
+    /// Todo lo que atrae a la nave: el sol, los planetas, los agujeros negros y los ovnis
     fn gravity_sources(&self) -> Vec<Body> {
+        let t = self.world_time;
         let mut fuentes = self.bodies();
         fuentes.extend(BLACK_HOLES.iter().map(|h| Body { center: h.position, radius: h.radius, surface_gravity: h.gravity, velocity: Vec3::ZERO }));
+        fuentes.extend(UFOS.iter().map(|u| Body { center: scenario::ufo_position(u, t), radius: u.size, surface_gravity: u.gravity, velocity: scenario::ufo_velocity(u, t) }));
         fuentes
     }
 
@@ -504,7 +526,8 @@ impl Game {
     }
 
     fn registrar_choque(&mut self, body: &'static str, object: Option<&'static str>, c: physics::Contact) {
-        if body != "AGUJERO NEGRO" {
+        // Sin chispas contra el agujero negro ni el ovni: tienen sonido propio.
+        if body != "AGUJERO NEGRO" && body != "OVNI" {
             self.sparks.burst(self.ship.position - c.normal * NAVE_RADIO, c.normal, c.body_velocity, c.impact_speed);
         }
         self.collisions.push(CollisionEvent {
@@ -1382,6 +1405,34 @@ mod tests {
     }
 
     #[test]
+    fn la_cercania_al_agujero_negro_sube_al_acercarse() {
+        let mut g = jugando();
+        let h = &BLACK_HOLES[0];
+        poner(&mut g, h.position + Vec3::new(h.core_radius() + AGUJERO_ALCANCE + 10.0, 0.0, 0.0));
+        let lejos = g.black_hole_proximity();
+        poner(&mut g, h.position + Vec3::new(h.core_radius() + AGUJERO_ALCANCE * 0.5, 0.0, 0.0));
+        let medio = g.black_hole_proximity();
+        poner(&mut g, h.position + Vec3::new(h.core_radius(), 0.0, 0.0));
+        let tocando = g.black_hole_proximity();
+        assert_eq!(lejos, 0.0);
+        assert!((medio - 0.5).abs() < 1e-3);
+        assert!((tocando - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn la_cercania_al_ovni_sube_al_acercarse() {
+        let mut g = jugando();
+        let u = &UFOS[0];
+        let c = scenario::ufo_position(u, g.world_time);
+        poner(&mut g, c + Vec3::new(u.size + OVNI_ALCANCE + 10.0, 0.0, 0.0));
+        let lejos = g.ufo_proximity();
+        poner(&mut g, c + Vec3::new(u.size, 0.0, 0.0));
+        let tocando = g.ufo_proximity();
+        assert_eq!(lejos, 0.0);
+        assert!((tocando - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
     fn la_nave_no_atraviesa_el_nucleo_de_un_agujero_negro_y_avisa_el_choque() {
         let mut g = jugando();
         let h = &BLACK_HOLES[0];
@@ -1391,6 +1442,20 @@ mod tests {
         g.collide_holes(0.016);
         assert!(g.ship.position.distance(h.position) >= radio + NAVE_RADIO - 1e-3);
         assert!(g.take_collisions().iter().any(|c| c.body == "AGUJERO NEGRO" && c.object.is_none()));
+    }
+
+    #[test]
+    fn el_ovni_atrae_a_la_nave_pero_siempre_se_puede_escapar() {
+        let mut g = jugando();
+        for u in UFOS.iter() {
+            assert!(u.gravity < crate::ship::EMPUJE);
+            let c = scenario::ufo_position(u, g.world_time);
+            // Solo el ovni cerca: en la superficie la atracción apunta hacia él.
+            poner(&mut g, c + Vec3::new(u.size * 2.0, 0.0, 0.0));
+            let ovnis: Vec<Body> = g.gravity_sources().into_iter().skip(1 + PLANETS.len() + BLACK_HOLES.len()).collect();
+            let a = physics::gravity_at(g.ship.position, &ovnis);
+            assert!(a.x < 0.0, "apunta hacia el ovni");
+        }
     }
 
     #[test]
@@ -1425,7 +1490,7 @@ mod tests {
         }
         // Los índices de los cuerpos con los que se choca no cambian.
         assert_eq!(g.bodies().len(), 1 + PLANETS.len());
-        assert_eq!(g.gravity_sources().len(), 1 + PLANETS.len() + BLACK_HOLES.len());
+        assert_eq!(g.gravity_sources().len(), 1 + PLANETS.len() + BLACK_HOLES.len() + UFOS.len());
     }
 
     #[test]
