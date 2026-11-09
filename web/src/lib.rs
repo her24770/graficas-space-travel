@@ -186,6 +186,7 @@ mod tests {
     #[test]
     fn el_motor_y_el_protocolo_usan_los_mismos_numeros() {
         assert_eq!(engine::scenario::GATE_COUNT, GATE_COUNT as usize);
+        assert_eq!(engine::remote::ELIMINADO, protocol::ELIMINADO);
         assert_eq!(engine::NAME_LEN, NAME_LEN);
         assert_eq!(Phase::Lobby as u8, PHASE_LOBBY);
         assert_eq!(Phase::Countdown as u8, PHASE_COUNTDOWN);

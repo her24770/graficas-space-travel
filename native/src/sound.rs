@@ -95,7 +95,7 @@ impl Sonidos {
         }
 
         for c in choques {
-=            let anomalia = c.body == "AGUJERO NEGRO" || c.body == "OVNI";
+            let anomalia = c.body == "AGUJERO NEGRO" || c.body == "OVNI";
             if anomalia {
                 // Un solo sonido por contacto: mientras siga pegado no se repite.
                 let nuevo = self.reloj - self.ultimo_agujero > CONTACTO_NUEVO;

@@ -88,8 +88,8 @@ pub struct UfoDef {
 }
 
 pub static UFOS: [UfoDef; 2] = [
-    UfoDef { model: "ovni", center: Vec3 { x: 60.0, y: 200.0, z: 300.0 }, orbit: 100.0, bob: 15.0, period: 40.0, size: 8.0, gravity: 25.0 },
-    UfoDef { model: "ovni", center: Vec3 { x: -250.0, y: 190.0, z: -260.0 }, orbit: 80.0, bob: 12.0, period: -34.0, size: 8.0, gravity: 25.0 },
+    UfoDef { model: "ovni", center: Vec3 { x: 60.0, y: 200.0, z: 300.0 }, orbit: 100.0, bob: 15.0, period: 80.0, size: 8.0, gravity: 25.0 },
+    UfoDef { model: "ovni", center: Vec3 { x: -250.0, y: 190.0, z: -260.0 }, orbit: 80.0, bob: 12.0, period: -68.0, size: 8.0, gravity: 25.0 },
 ];
 
 pub fn ufo_position(u: &UfoDef, t: f64) -> Vec3 {

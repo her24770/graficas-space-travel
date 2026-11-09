@@ -1,6 +1,6 @@
 //! Reloj de la carrera en el servidor: espera → cuenta regresiva → carrera → resultados.
 //! No usa el reloj del sistema: recibe `now` (ms), así se prueba sin esperar.
-use protocol::{PlayerState, GATE_COUNT, PHASE_COUNTDOWN, PHASE_LOBBY, PHASE_RACING, PHASE_RESULTS};
+use protocol::{PlayerState, ELIMINADO, GATE_COUNT, PHASE_COUNTDOWN, PHASE_LOBBY, PHASE_RACING, PHASE_RESULTS};
 use std::collections::HashMap;
 
 pub const CUENTA_ATRAS_MS: u32 = 3000;
@@ -52,9 +52,10 @@ impl RaceState {
         }
     }
 
-    /// Un jugador reporta cuántos puntos lleva. Al completar todos se registra su tiempo, una sola vez.
+    /// Un jugador reporta cuántos puntos lleva. Al completar todos, o al quedar eliminado, se registra su tiempo, una sola vez
     pub fn record_progress(&mut self, id: u32, progress: u8, now: u32) {
-        if self.phase == PHASE_RACING && progress >= GATE_COUNT && !self.finishes.contains_key(&id) {
+        let termino = progress & ELIMINADO != 0 || progress >= GATE_COUNT;
+        if self.phase == PHASE_RACING && termino && !self.finishes.contains_key(&id) {
             self.finishes.insert(id, now.wrapping_sub(self.phase_start).max(1));
         }
     }
@@ -110,6 +111,20 @@ mod tests {
         r.record_progress(1, GATE_COUNT, 23_000);
         r.record_progress(1, GATE_COUNT, 30_000);
         assert_eq!(r.finish_ms(1), 20_000, "tiempo desde que arrancó la carrera (3000)");
+    }
+
+    #[test]
+    fn un_jugador_eliminado_cuenta_como_terminado_y_cierra_la_carrera() {
+        let (mut r, p) = (RaceState::new(), jugadores(&[1, 2]));
+        r.start(0);
+        r.tick(3000, &p);
+        r.record_progress(1, ELIMINADO | 3, 9000);
+        assert_eq!(r.finish_ms(1), 6000);
+        r.tick(9000, &p);
+        assert_eq!(r.phase, PHASE_RACING, "falta el 2");
+        r.record_progress(2, ELIMINADO, 10_000);
+        r.tick(10_000, &p);
+        assert_eq!(r.phase, PHASE_RESULTS);
     }
 
     #[test]

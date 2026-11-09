@@ -11,7 +11,7 @@ use crate::{
     props::{self, PropInstance},
     race::{Phase, Race},
     raster::{self, draw_mesh},
-    remote::{RemotePlayer, RemoteShip, NAME_LEN},
+    remote::{RemotePlayer, RemoteShip, ELIMINADO, NAME_LEN},
     rng::Rng,
     scenario::{self, Gate, BLACK_HOLES, GATE_COUNT, PLANETS, PROPS_SEED, SUN_GRAVITY, SUN_RADIUS, UFOS},
     shaders::{Material, Scene},
@@ -40,6 +40,8 @@ const AGUJERO_ALCANCE: f32 = 160.0;
 const OVNI_ALCANCE: f32 = 100.0;
 /// Segundos que se muestra un aviso en pantalla.
 const AVISO_S: f32 = 2.0;
+/// Cuánto dura el cartel de "perdiste" antes de reaparecer
+const DERROTA_S: f32 = 4.0;
 /// Se puede entrar en órbita a menos de esta altura sobre la superficie (en radios del cuerpo).
 const CAPTURA_RADIOS: f32 = 5.0;
 /// Los objetos de superficie se dibujan a menos de esta distancia (en radios del planeta).
@@ -86,6 +88,30 @@ pub struct CollisionEvent {
     pub impact_speed: f32,
 }
 
+/// Qué se tragó a la nave.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Causa {
+    AgujeroNegro,
+    Ovni,
+}
+
+impl Causa {
+    fn mensaje(self) -> &'static str {
+        match self {
+            Causa::AgujeroNegro => "CAISTE EN UN AGUJERO NEGRO, YA NO PUEDES ESCAPAR",
+            Causa::Ovni => "LOS ALIENS TE RAPTARON, YA NO PUEDES ESCAPAR",
+        }
+    }
+}
+
+/// La nave perdió: se muestra el cartel y la nave queda quieta hasta que termine.
+#[derive(Clone, Copy, Debug)]
+struct Derrota {
+    causa: Causa,
+    desde: f32,
+    elimina: bool,
+}
+
 struct Model {
     name: String,
     mesh: Mesh,
@@ -119,6 +145,8 @@ struct Entry {
     color: u32,
     progress: usize,
     finish_ms: u32,
+    /// Perdió en plena carrera: con los aros que alcanzó y tiempo cuándo perdio.
+    eliminado: bool,
 }
 
 /// Estado del juego. Native y web llaman a la misma lógica: `update(dt, input)` y `render(fb)`.
@@ -141,6 +169,12 @@ pub struct Game {
     last_phase: Phase,
     progress: usize,
     finish_time: Option<f32>,
+    /// pierde al colisionar con ovni o agujero negro
+    derrota: Option<Derrota>,
+    /// Perdió en plena carrera: se queda quieta hasta la siguiente carrera o el menú.
+    eliminado: bool,
+    /// Segundos de carrera en que quedó eliminado.
+    muerte_time: Option<f32>,
     slot: usize,
     my_id: Option<u32>,
     /// Mi nombre (ASCII, ceros al final); todo ceros = sin nombre.
@@ -290,6 +324,9 @@ impl Game {
             last_phase: Phase::Lobby,
             progress: 0,
             finish_time: None,
+            derrota: None,
+            eliminado: false,
+            muerte_time: None,
             slot: 0,
             my_id: None,
             name: [0; NAME_LEN],
@@ -541,6 +578,30 @@ impl Game {
             self.collisions.remove(0); // nadie los está leyendo: no crecer sin límite
         }
         self.notice(format!("COLISION: {}", object.unwrap_or(body)), 0xEF5350);
+        match body {
+            "AGUJERO NEGRO" => self.derrotar(Causa::AgujeroNegro),
+            "OVNI" => self.derrotar(Causa::Ovni),
+            _ => {}
+        }
+    }
+
+    /// La nave perdió. En plena carrera queda eliminada y en la sala o los resultados solo ve el cartel y reaparece en el mapa.
+    fn derrotar(&mut self, causa: Causa) {
+        if self.derrota.is_some() {
+            return;
+        }
+        let elimina = self.race.phase == Phase::Racing && self.finish_time.is_none() && !self.eliminado;
+        self.derrota = Some(Derrota { causa, desde: self.time, elimina });
+        self.orbit = None;
+        self.ship.velocity = Vec3::ZERO;
+        if elimina {
+            self.eliminado = true;
+            self.muerte_time = Some(self.race.time);
+            if !self.online {
+                self.race.finish_local();
+                self.last_phase = Phase::Results;
+            }
+        }
     }
 
     fn toggle_orbit(&mut self) {
@@ -648,14 +709,27 @@ impl Game {
             if self.race.phase == Phase::Countdown {
                 self.progress = 0;
                 self.finish_time = None;
+                self.eliminado = false;
+                self.muerte_time = None;
+                self.derrota = None;
                 self.screen = Screen::Playing; // si alguien larga, nadie se queda en el menú
                 self.place_on_grid();
             }
             self.last_phase = self.race.phase;
         }
 
-        // En el menú y en la cuenta regresiva la nave espera quieta en la parrilla.
-        let quieta = self.screen == Screen::Menu || self.race.phase == Phase::Countdown;
+        // Pasado el cartel de "perdiste", vuelve a su casilla de salida, Si fue eliminada se queda quieta hasta la revancha o el menú.
+        if let Some(d) = self.derrota {
+            if self.time - d.desde >= DERROTA_S {
+                self.derrota = None;
+                self.place_on_grid();
+            }
+        }
+
+        let quieta = self.screen == Screen::Menu
+            || self.race.phase == Phase::Countdown
+            || self.derrota.is_some()
+            || self.eliminado;
         match self.orbit.filter(|_| !quieta) {
             Some(o) => self.fly_orbit(o, input, dt),
             None => {
@@ -686,6 +760,9 @@ impl Game {
 
     fn back_to_menu(&mut self) {
         self.screen = Screen::Menu;
+        self.derrota = None;
+        self.eliminado = false;
+        self.muerte_time = None;
         if !self.online {
             self.race.reset();
             self.last_phase = Phase::Lobby;
@@ -731,14 +808,14 @@ impl Game {
             yaw: self.ship.yaw,
             pitch: self.ship.pitch,
             model: self.selected as u8,
-            progress: self.progress as u8,
+            progress: self.progress as u8 | if self.eliminado { ELIMINADO } else { 0 },
             finish_ms: self.finish_ms(),
             name: self.name,
         }
     }
 
     fn finish_ms(&self) -> u32 {
-        self.finish_time.map_or(0, |t| ((t * 1000.0) as u32).max(1))
+        self.finish_time.or(self.muerte_time).map_or(0, |t| ((t * 1000.0) as u32).max(1))
     }
 
     /// Reemplaza la lista de otros jugadores; los que ya no están desaparecen.
@@ -1001,17 +1078,21 @@ impl Game {
     }
 
     fn entries(&self) -> Vec<Entry> {
-        let mut list = vec![Entry { label: nombre_mostrado(&self.name, "TU".into()), color: self.my_id.map_or(0xFFFFFF, color_jugador), progress: self.progress, finish_ms: self.finish_ms() }];
+        let mut list = vec![Entry { label: nombre_mostrado(&self.name, "TU".into()), color: self.my_id.map_or(0xFFFFFF, color_jugador), progress: self.progress, finish_ms: self.finish_ms(), eliminado: self.eliminado }];
         for r in &self.remotes {
             list.push(Entry {
                 label: nombre_mostrado(&r.shown.name, format!("J{}", r.shown.id)),
                 color: COLORES_JUGADORES[r.shown.id as usize % COLORES_JUGADORES.len()],
-                progress: r.target.progress as usize,
+                progress: (r.target.progress & !ELIMINADO) as usize,
                 finish_ms: r.target.finish_ms,
+                eliminado: r.target.progress & ELIMINADO != 0,
             });
         }
-        // Primero los que terminaron (por tiempo), luego por puntos de control.
-        list.sort_by_key(|e| (e.finish_ms == 0, if e.finish_ms == 0 { 0 } else { e.finish_ms }, usize::MAX - e.progress));
+        // Primero los que terminaron (por tiempo), luego por puntos de control; los eliminados cuentan como no terminados.
+        list.sort_by_key(|e| {
+            let termino = e.finish_ms > 0 && !e.eliminado;
+            (!termino, if termino { e.finish_ms } else { 0 }, usize::MAX - e.progress)
+        });
         list
     }
 
@@ -1092,8 +1173,9 @@ impl Game {
                 hud::centered(fb, cx, h / 3 + 90 * s as i32, s * 2, white, "PREPARATE");
             }
             Phase::Racing => {
-                hud::centered(fb, cx, m, s * 2, white, &fmt_time(self.finish_time.unwrap_or(self.race.time)));
+                hud::centered(fb, cx, m, s * 2, white, &fmt_time(self.finish_time.or(self.muerte_time).unwrap_or(self.race.time)));
                 let estado = match self.finish_time {
+                    _ if self.eliminado => "ELIMINADO! ESPERANDO A LOS DEMAS".to_string(),
                     Some(_) => "TERMINASTE! ESPERANDO A LOS DEMAS".to_string(),
                     None => format!("PUNTO {}/{}", self.progress + 1, GATE_COUNT),
                 };
@@ -1103,7 +1185,7 @@ impl Game {
         }
 
         // Marcador del siguiente punto de control (en pantalla o en el borde)
-        if self.race.phase == Phase::Racing && self.progress < GATE_COUNT {
+        if self.race.phase == Phase::Racing && self.progress < GATE_COUNT && !self.eliminado {
             let g = self.course[self.progress].pos;
             let dist = g.distance(self.ship.position);
             let (cxf, cyf) = (w as f32 / 2.0, h as f32 / 2.0);
@@ -1141,13 +1223,38 @@ impl Game {
             let texto = if en_sala {
                 e.label.clone()
             } else {
-                let estado = if e.finish_ms > 0 { fmt_time(e.finish_ms as f32 / 1000.0) } else { format!("{}/{}", e.progress, GATE_COUNT) };
+                let tiempo = fmt_time(e.finish_ms as f32 / 1000.0);
+                let estado = if e.eliminado {
+                    format!("{}/{} AROS {}", e.progress, GATE_COUNT, tiempo)
+                } else if e.finish_ms > 0 {
+                    tiempo
+                } else {
+                    format!("{}/{}", e.progress, GATE_COUNT)
+                };
                 format!("{} {} {}", i + 1, e.label, estado)
             };
             hud::label(fb, m, base + i as i32 * line, s, e.color, &texto);
         }
 
         self.draw_minimap(fb, s as i32, m);
+        self.draw_derrota(fb, s);
+    }
+
+    /// Cartel de "perdiste" con la causa y qué pasa después.
+    fn draw_derrota(&self, fb: &mut Framebuffer, s: usize) {
+        let Some(d) = &self.derrota else { return };
+        let si = s as i32;
+        let (cx, h) = (fb.width as i32 / 2, fb.height as i32);
+        hud::shade_rect(fb, 0, 0, fb.width as i32, h, 0x000000, 130);
+        hud::centered(fb, cx, h / 3, s * 4, 0xEF5350, "PERDISTE");
+        hud::centered(fb, cx, h / 3 + 40 * si, s, 0xFFFFFF, d.causa.mensaje());
+        let pie = if d.elimina {
+            let t = self.muerte_time.unwrap_or(self.race.time);
+            format!("PASASTE {}/{} AROS EN {}", self.progress, GATE_COUNT, fmt_time(t))
+        } else {
+            "VOLVIENDO AL MAPA...".to_string()
+        };
+        hud::centered(fb, cx, h / 3 + 60 * si, s, 0x90A4AE, &pie);
     }
 
     /// Pantalla de inicio: título, vista previa de la nave, controles y estado de la sala.
@@ -1430,6 +1537,127 @@ mod tests {
         let tocando = g.ufo_proximity();
         assert_eq!(lejos, 0.0);
         assert!((tocando - 1.0).abs() < 1e-3);
+    }
+
+    /// Pone la nave pegada al núcleo del primer agujero negro, yendo hacia él, y deja correr un cuadro.
+    fn caer_en_agujero(g: &mut Game) {
+        let h = &BLACK_HOLES[0];
+        poner(g, h.position + Vec3::new(h.core_radius() + NAVE_RADIO - 0.2, 0.0, 0.0));
+        g.ship.velocity = Vec3::new(-30.0, 0.0, 0.0);
+        g.update(0.016, &Input::default());
+    }
+
+    fn caer_en_ovni(g: &mut Game) {
+        let u = &UFOS[0];
+        let c = scenario::ufo_position(u, g.world_time);
+        poner(g, c + Vec3::new(u.size + NAVE_RADIO - 0.2, 0.0, 0.0));
+        g.ship.velocity = Vec3::new(-30.0, 0.0, 0.0);
+        g.update(0.016, &Input::default());
+    }
+
+    #[test]
+    fn en_la_sala_caer_en_un_agujero_negro_muestra_el_cartel_y_reaparece() {
+        let mut g = jugando();
+        assert_eq!(g.phase(), Phase::Lobby);
+        caer_en_agujero(&mut g);
+        let d = g.derrota.expect("perdió");
+        assert_eq!((d.causa, d.elimina), (Causa::AgujeroNegro, false));
+        assert_eq!(d.causa.mensaje(), "CAISTE EN UN AGUJERO NEGRO, YA NO PUEDES ESCAPAR");
+        assert!(!g.eliminado);
+        let quieta = g.ship.position;
+        g.update(0.5, &Input { forward: true, ..Default::default() });
+        assert!(g.ship.position.distance(quieta) < 1e-3, "con el cartel la nave no se mueve");
+
+        avanzar(&mut g, DERROTA_S + 0.2);
+        assert!(g.derrota.is_none());
+        let (pos, _, _) = scenario::grid_slot(g.slot);
+        assert!(g.ship.position.distance(pos) < 1.0, "reaparece en su casilla de salida");
+        assert_eq!(g.phase(), Phase::Lobby);
+    }
+
+    #[test]
+    fn caer_en_un_ovni_dice_que_los_aliens_te_raptaron() {
+        let mut g = jugando();
+        caer_en_ovni(&mut g);
+        let d = g.derrota.expect("perdió");
+        assert_eq!(d.causa, Causa::Ovni);
+        assert_eq!(d.causa.mensaje(), "LOS ALIENS TE RAPTARON, YA NO PUEDES ESCAPAR");
+    }
+
+    #[test]
+    fn en_plena_carrera_perder_termina_la_carrera_y_la_tabla_muestra_aros_y_tiempo() {
+        let mut g = jugando();
+        g.update(0.05, &empezar());
+        avanzar(&mut g, 3.2);
+        assert_eq!(g.phase(), Phase::Racing);
+        for i in 0..3 {
+            g.ship.position = g.course[i].pos;
+            g.update(0.05, &Input::default());
+        }
+        assert_eq!(g.progress(), 3);
+        caer_en_agujero(&mut g);
+
+        assert!(g.eliminado && g.derrota.is_some_and(|d| d.elimina));
+        assert_eq!(g.phase(), Phase::Results, "offline la carrera termina");
+        let e = &g.entries()[0];
+        assert!(e.eliminado && e.progress == 3 && e.finish_ms > 0);
+
+        // Pasado el cartel vuelve a su casilla de salida, lejos del agujero, y sigue quieta.
+        avanzar(&mut g, DERROTA_S + 0.2);
+        assert!(g.derrota.is_none() && g.eliminado);
+        let (casilla, _, _) = scenario::grid_slot(g.slot);
+        assert!(g.ship.position.distance(casilla) < 1.0);
+        assert_eq!(g.black_hole_proximity(), 0.0, "ya no se oye el agujero negro");
+        avanzar(&mut g, 1.0);
+        assert!(g.ship.position.distance(casilla) < 1.0, "eliminada no se mueve");
+    }
+
+    #[test]
+    fn online_el_eliminado_espera_a_los_demas_y_avisa_con_el_bit_de_eliminado() {
+        let mut g = jugando();
+        g.set_online(true);
+        g.set_race_server(Phase::Racing as u8, 5000);
+        g.update(0.05, &Input::default());
+        g.progress = 4;
+        caer_en_ovni(&mut g);
+
+        assert!(g.eliminado);
+        assert_eq!(g.phase(), Phase::Racing, "online solo el servidor termina la carrera");
+        let s = g.local_state();
+        assert_eq!(s.progress, 4 | ELIMINADO);
+        assert!(s.finish_ms > 0);
+
+        // Un rival eliminado se ve en la tabla con sus aros, sin contar como terminado.
+        g.set_remote_players(&[RemoteShip { progress: 2 | ELIMINADO, finish_ms: 7000, ..rival(7, 0.0) }]);
+        let rival_entry = g.entries().into_iter().find(|e| e.progress == 2).unwrap();
+        assert!(rival_entry.eliminado);
+    }
+
+    #[test]
+    fn los_eliminados_quedan_detras_de_los_que_terminaron() {
+        let mut g = jugando();
+        g.set_online(true);
+        g.set_race_server(Phase::Results as u8, 20_000);
+        g.update(0.05, &Input::default());
+        g.set_remote_players(&[
+            RemoteShip { progress: 1 | ELIMINADO, finish_ms: 2000, ..rival(1, 0.0) },
+            RemoteShip { progress: GATE_COUNT as u8, finish_ms: 30_000, ..rival(2, 0.0) },
+        ]);
+        let lista = g.entries();
+        assert_eq!(lista[0].finish_ms, 30_000, "el que terminó va primero aunque sea más lento");
+        assert!(lista.last().is_some());
+    }
+
+    #[test]
+    fn la_siguiente_carrera_borra_la_derrota() {
+        let mut g = jugando();
+        g.update(0.05, &empezar());
+        avanzar(&mut g, 3.2);
+        caer_en_agujero(&mut g);
+        assert!(g.eliminado);
+        g.update(0.05, &empezar()); // revancha
+        assert!(!g.eliminado && g.derrota.is_none() && g.muerte_time.is_none());
+        assert_eq!(g.local_state().progress, 0);
     }
 
     #[test]
