@@ -126,7 +126,7 @@ fn on_message(state: &Shared, id: u32, msg: ClientMsg) {
         ClientMsg::StartRace => {
             if w.race.start(now) {
                 for e in w.players.values_mut() {
-                    e.state.progress = 0;
+                    e.state.progress &= protocol::NO_CORRE; // reinicia los aros; quien no corre sigue fuera
                 }
             }
         }

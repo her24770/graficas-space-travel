@@ -4,11 +4,11 @@ use super::*;
 impl Game {
     pub(super) fn entries(&self) -> Vec<Entry> {
         let mut list = vec![Entry { label: nombre_mostrado(&self.name, "TU".into()), color: self.my_id.map_or(0xFFFFFF, color_jugador), progress: self.progress, finish_ms: self.finish_ms(), eliminado: self.eliminado }];
-        for r in &self.remotes {
+        for r in self.grupo() {
             list.push(Entry {
                 label: nombre_mostrado(&r.shown.name, format!("J{}", r.shown.id)),
                 color: COLORES_JUGADORES[r.shown.id as usize % COLORES_JUGADORES.len()],
-                progress: (r.target.progress & !ELIMINADO) as usize,
+                progress: (r.target.progress & crate::remote::PROGRESO) as usize,
                 finish_ms: r.target.finish_ms,
                 eliminado: r.target.progress & ELIMINADO != 0,
             });
@@ -47,7 +47,7 @@ impl Game {
         }
 
         // Nombre de cada rival sobre su nave, con el color con el que sale en la tabla de carrera.
-        for r in &self.remotes {
+        for r in self.rivales() {
             let arriba = r.shown.position + Vec3::new(0.0, NOMBRE_ALTURA, 0.0);
             if r.shown.position.distance(v.eye) > NOMBRE_DISTANCIA {
                 continue;
@@ -65,7 +65,7 @@ impl Game {
         hud::label(fb, m, m, s, white, &format!("VEL {:.0} U/S", self.ship.speed()));
         hud::label(fb, m, m + line, s, 0x90A4AE, &format!("TRIANGULOS {}", st.triangles));
         hud::label(fb, m, m + 2 * line, s, 0x90A4AE, &format!("OBJETOS {}/{}", st.visible, st.total));
-        let red = if self.online { format!("ONLINE {} JUGADORES", 1 + self.remotes.len()) } else { "SIN CONEXION".to_string() };
+        let red = if self.online { format!("ONLINE {} JUGADORES", 1 + self.en_linea().count()) } else { "SIN CONEXION".to_string() };
         hud::label(fb, m, m + 3 * line, s, if self.online { 0x66BB6A } else { 0xEF9A9A }, &red);
         let vista = match self.view {
             ViewMode::ThirdPerson => "3A PERSONA",
@@ -98,6 +98,7 @@ impl Game {
         // Carrera
         let cx = w / 2;
         match self.race.phase {
+            Phase::Countdown | Phase::Racing if self.esperando() => banner(fb, s, "CARRERA EN CURSO", "ESPERA A QUE TERMINE   M MENU"),
             Phase::Lobby => banner(fb, s, "SALA DE ESPERA", "ENTER EMPEZAR CARRERA   M MENU"),
             Phase::Countdown => {
                 let n = self.race.countdown_number().unwrap_or(1).to_string();
@@ -117,7 +118,7 @@ impl Game {
         }
 
         // Marcador del siguiente punto de control (en pantalla o en el borde)
-        if self.race.phase == Phase::Racing && self.progress < GATE_COUNT && !self.eliminado {
+        if self.race.phase == Phase::Racing && self.en_carrera && self.progress < GATE_COUNT && !self.eliminado {
             let g = self.course[self.progress].pos;
             marcador(fb, v, s, m, g, g.distance(self.ship.position), COLOR_SIGUIENTE);
         }
@@ -125,7 +126,7 @@ impl Game {
         // Posiciones
         let entries = self.entries();
         let base = h - m - line * (entries.len() as i32 + 1);
-        let en_sala = self.race.phase == Phase::Lobby;
+        let en_sala = self.race.phase == Phase::Lobby || self.esperando();
         hud::label(fb, m, base - line, s, 0x90A4AE, if en_sala { "EN LA SALA" } else { "POSICIONES" });
         for (i, e) in entries.iter().enumerate() {
             let texto = if en_sala {
@@ -192,7 +193,7 @@ impl Game {
             format!("SOBREVIVISTE {}{}", fmt_time(self.persecucion.tiempo), mejor)
         } else if d.elimina {
             let t = self.muerte_time.unwrap_or(self.race.time);
-            format!("PASASTE {}/{} AROS EN {}", self.progress, GATE_COUNT, fmt_time(t))
+            format!("PASASTE {}/{} AROS EN {}   VUELVES A LA SALA", self.progress, GATE_COUNT, fmt_time(t))
         } else {
             "VOLVIENDO AL MAPA...".to_string()
         };
@@ -248,11 +249,14 @@ impl Game {
 
         // Sala (derecha)
         let mut filas: Vec<(String, u32)> = Vec::new();
+        if self.esperando() {
+            filas.push(("CARRERA EN CURSO".into(), 0xEF5350));
+        }
         if self.online {
             filas.push(("ONLINE".into(), 0x66BB6A));
-            filas.push((format!("{} JUGADORES", 1 + self.remotes.len()), blanco));
+            filas.push((format!("{} JUGADORES", 1 + self.en_linea().count()), blanco));
             filas.push((nombre_mostrado(&self.name, "TU".into()), self.my_id.map_or(blanco, color_jugador)));
-            for r in &self.remotes {
+            for r in self.en_linea() {
                 filas.push((nombre_mostrado(&r.shown.name, format!("J{}", r.shown.id)), COLORES_JUGADORES[r.shown.id as usize % COLORES_JUGADORES.len()]));
             }
         } else {
@@ -275,12 +279,9 @@ impl Game {
 
         // Invitación a jugar
         let color = if (self.time * 2.0) as i32 % 2 == 0 { oro } else { 0xFFF59D };
-        hud::centered(fb, cx, h - m - 40 * si, s * 2, color, "ENTER = CARRERA");
-        if self.online {
-            hud::centered(fb, cx, h - m - 16 * si, s, 0x78909C, "PERSECUCION SOLO SIN CONEXION");
-        } else {
-            hud::centered(fb, cx, h - m - 20 * si, s * 2, 0xEF9A9A, "P = PERSECUCION");
-        }
+        let invitacion = if self.esperando() { "ENTER = SALA DE ESPERA" } else { "ENTER = CARRERA" };
+        hud::centered(fb, cx, h - m - 40 * si, s * 2, color, invitacion);
+        hud::centered(fb, cx, h - m - 20 * si, s * 2, 0xEF9A9A, "P = PERSECUCION");
     }
 
     /// Mapa visto desde arriba: sol, órbitas, planetas, circuito y jugadores.
@@ -306,14 +307,14 @@ impl Game {
             let (x, y) = to_map(scenario::planet_position(pl, self.world_time));
             hud::dot(fb, x, y, ((pl.radius / ALCANCE * size as f32) as i32).max(s), pl.material.tint());
         }
-        let racing = self.race.phase == Phase::Racing;
+        let racing = self.race.phase == Phase::Racing && !self.esperando();
         let aros = if self.modo == Modo::Persecucion { 0 } else { self.course.len() };
         for (i, g) in self.course.iter().enumerate().take(aros) {
             let (x, y) = to_map(g.pos);
             let (color, r) = if racing && i == self.progress { (COLOR_SIGUIENTE, s) } else if i < self.progress && racing { (0x2E7D32, 1) } else { (COLOR_PUNTO, 1) };
             hud::rect(fb, x - r, y - r, 2 * r + 1, 2 * r + 1, color);
         }
-        for r in &self.remotes {
+        for r in self.rivales() {
             let (x, y) = to_map(r.shown.position);
             if en_mapa(x, y) {
                 hud::dot(fb, x, y, s + 1, COLORES_JUGADORES[r.shown.id as usize % COLORES_JUGADORES.len()]);

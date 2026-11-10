@@ -150,7 +150,7 @@ impl Game {
         }
 
         // Puntos de control (en carrera se ven los que faltan; el siguiente resalta)
-        let racing = matches!(self.race.phase, Phase::Racing | Phase::Countdown);
+        let racing = matches!(self.race.phase, Phase::Racing | Phase::Countdown) && !self.esperando();
         let desde = if racing { self.progress } else { 0 };
         let aros = if self.modo == Modo::Persecucion { self.course.len() } else { 0 };
         for (i, g) in self.course.iter().enumerate().skip(desde.max(aros)) {
@@ -161,7 +161,7 @@ impl Game {
         }
 
         // Rivales y mi nave
-        for r in &self.remotes {
+        for r in self.rivales() {
             let s = &r.shown;
             let modelo = &self.models[s.model as usize % self.models.len()];
             let (mesh, escala) = (&modelo.mesh, modelo.scale);
@@ -197,7 +197,7 @@ impl Game {
     /// Si otro jugador usa el mismo modelo de nave, se le pon encima el tinte del color del jugador 
     pub(super) fn material_nave(&self, modelo: usize, color: u32, id: Option<u32>) -> Material {
         let n = self.models.len();
-        let usos = usize::from(self.selected == modelo) + self.remotes.iter().filter(|r| r.shown.model as usize % n == modelo).count();
+        let usos = usize::from(self.selected == modelo) + self.rivales().filter(|r| r.shown.model as usize % n == modelo).count();
         let tint = id.filter(|_| usos > 1).map(color_jugador);
         Material::Metal { color, tint }
     }

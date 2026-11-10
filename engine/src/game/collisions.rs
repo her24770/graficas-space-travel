@@ -189,7 +189,7 @@ impl Game {
         if self.derrota.is_some() {
             return;
         }
-        let elimina = self.race.phase == Phase::Racing && self.finish_time.is_none() && !self.eliminado;
+        let elimina = self.modo == Modo::Carrera && self.en_carrera && self.race.phase == Phase::Racing && self.finish_time.is_none() && !self.eliminado;
         self.derrota = Some(Derrota { causa, desde: self.time, elimina });
         if self.modo == Modo::Persecucion {
             let t = self.persecucion.tiempo;
@@ -282,14 +282,18 @@ mod tests {
         let (casilla, _, _) = scenario::grid_slot(g.slot);
         assert!(g.ship.position.distance(casilla) < 1.0);
         assert_eq!(g.black_hole_proximity(), 0.0, "ya no se oye el agujero negro");
-        avanzar(&mut g, 1.0);
-        assert!(g.ship.position.distance(casilla) < 1.0, "eliminada no se mueve");
+        let antes = g.ship.position;
+        avanzar_con(&mut g, 1.0, Input { forward: true, ..NADA });
+        assert!(g.ship.position.distance(antes) > 5.0, "eliminada puede moverse");
+        assert!(g.eliminado, "pero sigue contando como eliminada");
     }
 
     #[test]
     fn online_el_eliminado_espera_a_los_demas_y_avisa_con_el_bit_de_eliminado() {
         let mut g = jugando();
         g.set_online(true);
+        g.set_race_server(Phase::Countdown as u8, 0);
+        g.update(0.05, &Input::default());
         g.set_race_server(Phase::Racing as u8, 5000);
         g.update(0.05, &Input::default());
         g.progress = 4;
