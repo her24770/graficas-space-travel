@@ -11,7 +11,7 @@ use crate::{
     props::{self, PropInstance},
     race::{Phase, Race},
     raster::{self, draw_mesh},
-    remote::{RemotePlayer, RemoteShip, ELIMINADO, NAME_LEN},
+    remote::{RemotePlayer, RemoteShip, ELIMINADO, ESPERA, NAME_LEN, SOLO},
     rng::Rng,
     scenario::{self, Gate, BLACK_HOLES, GATE_COUNT, PLANETS, PROPS_SEED, SUN_GRAVITY, SUN_RADIUS, UFOS},
     shaders::{Material, Scene},
@@ -20,9 +20,13 @@ use crate::{
 };
 use std::f32::consts::PI;
 
+mod chase;
 mod collisions;
 mod render;
 mod ui;
+
+use chase::Persecucion;
+pub use chase::Modo;
 
 const FOV_Y: f32 = 60.0 * PI / 180.0;
 const FONDO: u32 = 0x02020A;
@@ -58,7 +62,7 @@ const PROP_COLISION: f32 = 0.5;
 /// Altura sobre la superficie hasta la que puede haber objetos con los que chocar.
 const PROPS_ALCANCE: f32 = 8.0;
 /// Giro de 180 grados y escala para el modelo, los modelos vienen normalizados a radio 1
-const AJUSTES_NAVE: &[(&str, bool, f32)] = &[("xwing", true, 2.0)];
+const AJUSTES_NAVE: &[(&str, bool, f32)] = &[("xwing", true, 2.0), ("pinkship", true, 2.0)];
 const ESCALA_NAVE: f32 = 1.2;
 
 /// Pantalla en la que está el jugador: el menú de inicio o el juego.
@@ -177,6 +181,14 @@ pub struct Game {
     derrota: Option<Derrota>,
     /// Perdió en plena carrera: se queda quieta hasta la siguiente carrera o el menú.
     eliminado: bool,
+    /// Entró a la carrera actual por su cuenta regresiva. Quien llega después, o está en persecución
+    /// cuando se larga, no corre: espera en la sala a que termine.
+    en_carrera: bool,
+    /// modo carrera o persecucion
+    modo: Modo,
+    persecucion: Persecucion,
+    /// Mejor tiempo sobrevivido en persecución.
+    mejor_persecucion: Option<f32>,
     /// Segundos de carrera en que quedó eliminado.
     muerte_time: Option<f32>,
     slot: usize,
@@ -330,6 +342,10 @@ impl Game {
             finish_time: None,
             derrota: None,
             eliminado: false,
+            en_carrera: false,
+            modo: Modo::Carrera,
+            persecucion: Persecucion::new(),
+            mejor_persecucion: None,
             muerte_time: None,
             slot: 0,
             my_id: None,
@@ -472,15 +488,23 @@ impl Game {
             }
             if input.start {
                 self.screen = Screen::Playing;
+                self.modo = Modo::Carrera;
+            } else if input.chase {
+                self.screen = Screen::Playing;
+                self.iniciar_persecucion();
             }
         } else {
             if input.cycle_model {
                 self.next_model(1);
             }
-            if input.menu && matches!(self.race.phase, Phase::Lobby | Phase::Results) {
+            if input.menu && (self.modo == Modo::Persecucion || self.esperando() || matches!(self.race.phase, Phase::Lobby | Phase::Results)) {
                 self.back_to_menu();
             } else if input.start {
-                if self.online {
+                if self.modo == Modo::Persecucion {
+                    self.iniciar_persecucion();
+                } else if self.esperando() {
+                    // Hay una carrera en marcha en la que no corro: no se puede empezar otra.
+                } else if self.online {
                     self.start_request = true;
                 } else {
                     self.race.start_local();
@@ -498,7 +522,7 @@ impl Game {
                     ViewMode::FirstPerson => ViewMode::ThirdPerson,
                 };
             }
-            if input.toggle_orbit && self.race.phase != Phase::Countdown {
+            if input.toggle_orbit && !(self.en_carrera && self.race.phase == Phase::Countdown) {
                 self.toggle_orbit();
             }
         }
@@ -509,13 +533,17 @@ impl Game {
 
         self.race.update(dt, self.online);
         if self.race.phase != self.last_phase {
-            if self.race.phase == Phase::Countdown {
+            if self.race.phase == Phase::Lobby {
+                self.en_carrera = false;
+            }
+            // Solo juegan la carrera jugadores en sala de espera
+            if self.race.phase == Phase::Countdown && self.screen == Screen::Playing && self.modo == Modo::Carrera {
+                self.en_carrera = true;
                 self.progress = 0;
                 self.finish_time = None;
                 self.eliminado = false;
                 self.muerte_time = None;
                 self.derrota = None;
-                self.screen = Screen::Playing; // si alguien larga, nadie se queda en el menú
                 self.place_on_grid();
             }
             self.last_phase = self.race.phase;
@@ -525,14 +553,17 @@ impl Game {
         if let Some(d) = self.derrota {
             if self.time - d.desde >= DERROTA_S {
                 self.derrota = None;
-                self.place_on_grid();
+                if self.modo == Modo::Persecucion {
+                    self.iniciar_persecucion();
+                } else {
+                    self.place_on_grid();
+                }
             }
         }
 
         let quieta = self.screen == Screen::Menu
-            || self.race.phase == Phase::Countdown
-            || self.derrota.is_some()
-            || self.eliminado;
+            || (self.en_carrera && self.race.phase == Phase::Countdown)
+            || self.derrota.is_some();
         match self.orbit.filter(|_| !quieta) {
             Some(o) => self.fly_orbit(o, input, dt),
             None => {
@@ -545,6 +576,9 @@ impl Game {
                     self.resolve_collisions(dt);
                 }
             }
+        }
+        if self.modo == Modo::Persecucion && self.screen == Screen::Playing && !quieta {
+            self.update_persecucion(dt);
         }
         match self.orbit {
             // En órbita la cámara va detrás y por encima, mirando hacia el planeta para que se vea.
@@ -563,12 +597,14 @@ impl Game {
 
     fn back_to_menu(&mut self) {
         self.screen = Screen::Menu;
+        self.modo = Modo::Carrera;
         self.derrota = None;
         self.eliminado = false;
         self.muerte_time = None;
         if !self.online {
             self.race.reset();
             self.last_phase = Phase::Lobby;
+            self.en_carrera = false;
             self.progress = 0;
             self.finish_time = None;
         }
@@ -585,8 +621,33 @@ impl Game {
         (Vec3::new(a.cos() * 230.0, 70.0 + 25.0 * (a * 0.7).sin(), a.sin() * 230.0), Vec3::ZERO)
     }
 
+    // Si hay carrera en progreso y jugadores entran despues se mantiene en sala de espera
+    pub fn esperando(&self) -> bool {
+        matches!(self.last_phase, Phase::Countdown | Phase::Racing) && !self.en_carrera
+    }
+
+    /// Jugadores conectados que están en la sala o en la carrera 
+    fn en_linea(&self) -> impl Iterator<Item = &RemotePlayer> {
+        self.remotes.iter().filter(|r| r.target.progress & SOLO == 0)
+    }
+
+    // jugadores conectados en carrera o en sala de espera
+    /// Los de mi grupo, para la tabla de la carrera: los que corren (eliminados incluidos) o, si espero, los que esperan.
+    fn grupo(&self) -> impl Iterator<Item = &RemotePlayer> {
+        let (solo, espero) = (self.modo == Modo::Persecucion, self.esperando());
+        let en_marcha = matches!(self.last_phase, Phase::Countdown | Phase::Racing);
+        self.en_linea().filter(move |r| !solo && (!en_marcha || (r.target.progress & ESPERA != 0) == espero))
+    }
+
+    /// Los que veo volar. Un eliminado vuelve a la sala y puede moverse: los que siguen corriendo
+    /// no lo ven (solo figura en la tabla); otro eliminado, o quien espera, sí.
+    fn rivales(&self) -> impl Iterator<Item = &RemotePlayer> {
+        let corriendo = matches!(self.last_phase, Phase::Countdown | Phase::Racing) && self.en_carrera && !self.eliminado;
+        self.grupo().filter(move |r| !(corriendo && r.target.progress & ELIMINADO != 0))
+    }
+
     fn check_gates(&mut self) {
-        if self.race.phase != Phase::Racing || self.progress >= GATE_COUNT {
+        if self.modo != Modo::Carrera || !self.en_carrera || self.race.phase != Phase::Racing || self.progress >= GATE_COUNT {
             return;
         }
         let gate = self.course[self.progress];
@@ -611,7 +672,15 @@ impl Game {
             yaw: self.ship.yaw,
             pitch: self.ship.pitch,
             model: self.selected as u8,
-            progress: self.progress as u8 | if self.eliminado { ELIMINADO } else { 0 },
+            progress: self.progress as u8
+                | if self.eliminado { ELIMINADO } else { 0 }
+                | if self.modo == Modo::Persecucion {
+                    SOLO
+                } else if self.esperando() {
+                    ESPERA
+                } else {
+                    0
+                },
             finish_ms: self.finish_ms(),
             name: self.name,
         }
@@ -637,6 +706,7 @@ impl Game {
         if !online {
             self.remotes.clear();
             self.race.reset();
+            self.en_carrera = false;
             self.last_phase = Phase::Lobby;
             self.slot = 0;
         }
@@ -694,7 +764,7 @@ impl Game {
 
     /// Texto para el título de la ventana.
     pub fn status(&self) -> String {
-        let red = if self.online { format!("online: {} jugadores", 1 + self.remotes.len()) } else { "sin conexion".to_string() };
+        let red = if self.online { format!("online: {} jugadores", 1 + self.en_linea().count()) } else { "sin conexion".to_string() };
         format!("Space Travel | nave: {} (Tab cambia) | vel {:.0} u/s | {red}", self.models[self.selected].name, self.ship.speed())
     }
 }
@@ -728,7 +798,7 @@ mod tests {
     pub(crate) const NADA: Input = Input {
         forward: false, backward: false, yaw_left: false, yaw_right: false, pitch_up: false, pitch_down: false,
         brake: false, cycle_model: false, start: false, menu: false, toggle_gravity: false, toggle_orbit: false,
-        toggle_view: false, reseed: false,
+        toggle_view: false, reseed: false, chase: false,
     };
 
     /// Coloca la nave en `pos`, quieta, con la cámara detrás.
@@ -796,7 +866,7 @@ mod tests {
 
     #[test]
     fn online_el_servidor_manda_la_fase_y_la_nave_va_a_su_casilla() {
-        let mut g = Game::new(1);
+        let mut g = jugando(); // en la sala: solo ahí se entra a la carrera
         g.set_online(true);
         g.set_slot(2);
         g.ship.position = Vec3::new(5.0, 5.0, 5.0);
@@ -883,12 +953,30 @@ mod tests {
     }
 
     #[test]
-    fn si_el_servidor_larga_el_que_esta_en_el_menu_entra_a_la_carrera() {
+    fn si_el_servidor_larga_el_que_esta_en_el_menu_no_entra_a_la_carrera() {
         let mut g = Game::new(1);
         g.set_online(true);
         g.set_race_server(1, 0);
         g.update(0.01, &Input::default());
+        assert_eq!((g.screen(), g.phase()), (Screen::Menu, Phase::Countdown), "sigue en el menú");
+        assert!(g.esperando() && g.local_state().progress & ESPERA != 0, "avisa que no corre");
+        g.update(0.01, &empezar());
+        assert_eq!(g.screen(), Screen::Playing);
+        assert!(g.esperando(), "si entra a la sala con la carrera en marcha, espera");
+        g.set_race_server(Phase::Racing as u8, 1000);
+        g.update(0.01, &Input::default());
+        assert!(g.esperando() && g.progress() == 0);
+    }
+
+    #[test]
+    fn si_el_servidor_larga_el_que_esta_en_la_sala_entra_a_la_carrera() {
+        let mut g = jugando();
+        g.set_online(true);
+        g.set_race_server(1, 0);
+        g.update(0.01, &Input::default());
         assert_eq!((g.screen(), g.phase()), (Screen::Playing, Phase::Countdown));
+        assert!(!g.esperando());
+        assert_eq!(g.local_state().progress & (ESPERA | SOLO), 0);
     }
 
     #[test]
@@ -961,5 +1049,133 @@ mod tests {
         g.update(0.05, &Input { reseed: true, ..NADA });
         assert_eq!(g.props_seed(), semilla + 1);
         assert_ne!(g.placements[i][0].base, antes);
+    }
+
+    /// Un cliente online que ya está jugando, con la carrera del servidor en la fase `fase`.
+    fn online_en(fase: Phase) -> Game {
+        let mut g = jugando();
+        g.set_online(true);
+        g.set_race_server(fase as u8, 0);
+        g.update(0.05, &Input::default());
+        g
+    }
+
+    /// Un cliente online que vio arrancar la carrera desde la cuenta regresiva y ya corre.
+    fn corriendo() -> Game {
+        let mut g = online_en(Phase::Countdown);
+        g.set_race_server(Phase::Racing as u8, 1000);
+        g.update(0.05, &Input::default());
+        g
+    }
+
+    #[test]
+    fn quien_llega_con_la_carrera_empezada_espera_en_la_sala_y_no_corre() {
+        let mut g = online_en(Phase::Racing);
+        assert!(g.esperando(), "no entra como tardío");
+        assert!(g.local_state().progress & ESPERA != 0, "avisa al servidor que no corre");
+        g.ship.position = g.course[0].pos;
+        g.update(0.05, &Input::default());
+        assert_eq!(g.progress(), 0, "los aros no le cuentan");
+
+        g.update(0.05, &empezar());
+        assert!(!g.take_start_request(), "no puede pedir otra carrera encima");
+        g.render(&mut Framebuffer::new(640, 360)); // con el aviso de carrera en curso
+
+        g.set_race_server(Phase::Results as u8, 30_000);
+        g.update(0.05, &Input::default());
+        assert!(!g.esperando(), "cuando termina vuelve a ser uno más de la sala");
+        assert_eq!(g.local_state().progress & ESPERA, 0);
+    }
+
+    #[test]
+    fn quien_vio_la_cuenta_regresiva_corre_normalmente() {
+        let g = corriendo();
+        assert!(!g.esperando());
+        assert_eq!(g.local_state().progress & (ESPERA | SOLO), 0);
+    }
+
+    #[test]
+    fn la_persecucion_no_se_interrumpe_si_otros_largan_una_carrera_y_no_cuenta_como_tardio() {
+        let mut g = Game::new(1);
+        g.update(0.05, &Input { chase: true, ..NADA });
+        g.set_online(true);
+        g.set_race_server(Phase::Countdown as u8, 0);
+        g.update(0.05, &Input::default());
+        assert_eq!(g.mode(), Modo::Persecucion, "sigue en persecución");
+        assert!(g.local_state().progress & SOLO != 0);
+        let antes = g.ship.position;
+        g.update(0.05, &Input { forward: true, ..NADA });
+        g.update(0.05, &Input { forward: true, ..NADA });
+        assert!(g.ship.position.distance(antes) > 1e-4, "la cuenta regresiva de otros no la congela");
+
+        g.set_race_server(Phase::Racing as u8, 1000);
+        g.update(0.05, &Input::default());
+        g.ship.position = g.course[0].pos;
+        g.update(0.05, &Input::default());
+        assert_eq!(g.progress(), 0, "los aros no cuentan en persecución");
+
+        // Al salir con la carrera en marcha no entra tarde: queda esperando en la sala.
+        g.update(0.05, &Input { menu: true, ..NADA });
+        g.update(0.05, &empezar());
+        assert_eq!((g.screen(), g.mode()), (Screen::Playing, Modo::Carrera));
+        assert!(g.esperando());
+    }
+
+    #[test]
+    fn cada_uno_ve_solo_a_los_de_su_grupo() {
+        let corre = RemoteShip { progress: 2, ..rival(1, 0.0) };
+        let persigue = RemoteShip { progress: SOLO, ..rival(2, 0.0) };
+        let espera = RemoteShip { progress: ESPERA, ..rival(3, 0.0) };
+        let todos = [corre, persigue, espera];
+        let ids = |g: &Game| g.rivales().map(|r| r.target.id).collect::<Vec<_>>();
+
+        let mut g = corriendo();
+        g.set_remote_players(&todos);
+        assert_eq!(ids(&g), [1], "el que corre solo ve a los que corren");
+        assert_eq!(g.entries().len(), 2, "y el ranking solo los incluye a ellos");
+
+        let mut g = online_en(Phase::Racing);
+        g.set_remote_players(&todos);
+        assert_eq!(ids(&g), [3], "el que espera solo ve a los que esperan");
+
+        let mut g = Game::new(1);
+        g.update(0.05, &Input { chase: true, ..NADA });
+        g.set_remote_players(&todos);
+        assert!(ids(&g).is_empty(), "en persecución no se ve a nadie");
+
+        let mut g = online_en(Phase::Lobby);
+        g.set_remote_players(&todos);
+        assert_eq!(ids(&g), [1, 3], "en la sala se ven todos menos los de persecución");
+    }
+
+    #[test]
+    fn el_eliminado_vuela_libre_pero_los_que_corren_solo_lo_ven_en_la_tabla() {
+        let eliminado = RemoteShip { progress: 3 | ELIMINADO, finish_ms: 8000, ..rival(1, 0.0) };
+        let corre = RemoteShip { progress: 5, ..rival(2, 0.0) };
+
+        // Yo corro: el eliminado sale en la tabla pero su nave no se ve.
+        let mut g = corriendo();
+        g.set_remote_players(&[eliminado, corre]);
+        assert_eq!(g.rivales().map(|r| r.target.id).collect::<Vec<_>>(), [2]);
+        assert_eq!(g.entries().len(), 3, "yo + el eliminado + el que corre");
+
+        // Yo también estoy eliminado: ya no corro, vuelo libre y veo a todos.
+        g.derrotar(Causa::Ovni);
+        avanzar(&mut g, DERROTA_S + 0.2);
+        assert!(g.eliminado && g.derrota.is_none());
+        let antes = g.ship.position;
+        avanzar_con(&mut g, 1.0, Input { forward: true, ..NADA });
+        assert!(g.ship.position.distance(antes) > 5.0, "después del cartel puedo volar");
+        assert_eq!(g.rivales().count(), 2);
+    }
+
+    #[test]
+    fn perder_con_la_carrera_en_marcha_solo_elimina_a_quien_corre() {
+        let mut g = online_en(Phase::Racing);
+        g.derrotar(Causa::Ovni);
+        assert!(!g.eliminado, "el que espera no queda eliminado");
+        let mut g = corriendo();
+        g.derrotar(Causa::Ovni);
+        assert!(g.eliminado);
     }
 }

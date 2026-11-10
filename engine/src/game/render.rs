@@ -138,10 +138,22 @@ impl Game {
             self.draw_object(fb, &v, &mut st, mesh, &model, centro, u.size * 1.1, &Material::Ufo);
         }
 
+        // Ovnis modo persecucion
+        if self.modo == Modo::Persecucion && !menu {
+            let r = chase::CAZADOR_RADIO;
+            if let Some(mesh) = self.ufo_meshes.first() {
+                for o in &self.persecucion.ovnis {
+                    let model = Mat4::translation(o.position) * Mat4::rotation_y(self.time * 2.0) * Mat4::rotation_z(0.25) * Mat4::scale(Vec3::new(r, r, r));
+                    self.draw_object(fb, &v, &mut st, mesh, &model, o.position, r * 1.1, &Material::Ufo);
+                }
+            }
+        }
+
         // Puntos de control (en carrera se ven los que faltan; el siguiente resalta)
-        let racing = matches!(self.race.phase, Phase::Racing | Phase::Countdown);
+        let racing = matches!(self.race.phase, Phase::Racing | Phase::Countdown) && !self.esperando();
         let desde = if racing { self.progress } else { 0 };
-        for (i, g) in self.course.iter().enumerate().skip(desde) {
+        let aros = if self.modo == Modo::Persecucion { self.course.len() } else { 0 };
+        for (i, g) in self.course.iter().enumerate().skip(desde.max(aros)) {
             let (yaw, pitch) = scenario::orientation(g.dir);
             let model = Mat4::translation(g.pos) * Mat4::rotation_y(yaw) * Mat4::rotation_x(pitch);
             let color = if racing && i == self.progress { COLOR_SIGUIENTE } else { COLOR_PUNTO };
@@ -149,7 +161,7 @@ impl Game {
         }
 
         // Rivales y mi nave
-        for r in &self.remotes {
+        for r in self.rivales() {
             let s = &r.shown;
             let modelo = &self.models[s.model as usize % self.models.len()];
             let (mesh, escala) = (&modelo.mesh, modelo.scale);
@@ -185,7 +197,7 @@ impl Game {
     /// Si otro jugador usa el mismo modelo de nave, se le pon encima el tinte del color del jugador 
     pub(super) fn material_nave(&self, modelo: usize, color: u32, id: Option<u32>) -> Material {
         let n = self.models.len();
-        let usos = usize::from(self.selected == modelo) + self.remotes.iter().filter(|r| r.shown.model as usize % n == modelo).count();
+        let usos = usize::from(self.selected == modelo) + self.rivales().filter(|r| r.shown.model as usize % n == modelo).count();
         let tint = id.filter(|_| usos > 1).map(color_jugador);
         Material::Metal { color, tint }
     }

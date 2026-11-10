@@ -187,6 +187,9 @@ mod tests {
     fn el_motor_y_el_protocolo_usan_los_mismos_numeros() {
         assert_eq!(engine::scenario::GATE_COUNT, GATE_COUNT as usize);
         assert_eq!(engine::remote::ELIMINADO, protocol::ELIMINADO);
+        assert_eq!(engine::remote::SOLO, protocol::SOLO);
+        assert_eq!(engine::remote::ESPERA, protocol::ESPERA);
+        const { assert!(protocol::GATE_COUNT <= engine::remote::PROGRESO) } // los aros caben en los bits de progreso
         assert_eq!(engine::NAME_LEN, NAME_LEN);
         assert_eq!(Phase::Lobby as u8, PHASE_LOBBY);
         assert_eq!(Phase::Countdown as u8, PHASE_COUNTDOWN);

@@ -19,6 +19,7 @@ pub mod bits {
     pub const ORBIT: u32 = 2048;
     pub const VIEW: u32 = 4096;
     pub const RESEED: u32 = 8192;
+    pub const CHASE: u32 = 16384;
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -37,6 +38,7 @@ pub struct Input {
     pub toggle_orbit: bool,
     pub toggle_view: bool,
     pub reseed: bool,
+    pub chase: bool,
 }
 
 impl Input {
@@ -56,6 +58,7 @@ impl Input {
             toggle_orbit: b & bits::ORBIT != 0,
             toggle_view: b & bits::VIEW != 0,
             reseed: b & bits::RESEED != 0,
+            chase: b & bits::CHASE != 0,
         }
     }
 }

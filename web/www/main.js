@@ -19,7 +19,7 @@ const TECLAS = {
   ArrowUp: 16, ArrowDown: 32, Space: 64,
 };
 // Teclas de una sola pulsación (mismos bits que engine::input::bits)
-const UNA_VEZ = { Tab: 128, Enter: 256, KeyM: 512, KeyG: 1024, KeyO: 2048, KeyV: 4096, KeyR: 8192 };
+const UNA_VEZ = { Tab: 128, Enter: 256, KeyM: 512, KeyG: 1024, KeyO: 2048, KeyV: 4096, KeyR: 8192, KeyP: 16384 };
 let presionadas = 0;
 let unaVez = 0;
 

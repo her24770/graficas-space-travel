@@ -25,7 +25,7 @@ pub mod sparks;
 pub mod terrain;
 
 pub use framebuffer::Framebuffer;
-pub use game::{Game, RenderStats, Screen};
+pub use game::{Game, Modo, RenderStats, Screen};
 pub use input::Input;
 pub use math::{Mat4, Vec3, Vec4};
 pub use obj::Mesh;

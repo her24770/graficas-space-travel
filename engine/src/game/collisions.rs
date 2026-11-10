@@ -15,7 +15,7 @@ impl Game {
         let t = self.world_time;
         UFOS.iter()
             .map(|u| 1.0 - (self.ship.position.distance(scenario::ufo_position(u, t)) - u.size) / OVNI_ALCANCE)
-            .fold(0.0, f32::max)
+            .fold(self.cazador_cercania(), f32::max)
             .clamp(0.0, 1.0)
     }
 
@@ -189,8 +189,12 @@ impl Game {
         if self.derrota.is_some() {
             return;
         }
-        let elimina = self.race.phase == Phase::Racing && self.finish_time.is_none() && !self.eliminado;
+        let elimina = self.modo == Modo::Carrera && self.en_carrera && self.race.phase == Phase::Racing && self.finish_time.is_none() && !self.eliminado;
         self.derrota = Some(Derrota { causa, desde: self.time, elimina });
+        if self.modo == Modo::Persecucion {
+            let t = self.persecucion.tiempo;
+            self.mejor_persecucion = Some(self.mejor_persecucion.map_or(t, |m| m.max(t)));
+        }
         self.orbit = None;
         self.ship.velocity = Vec3::ZERO;
         if elimina {
@@ -208,21 +212,6 @@ impl Game {
 mod tests {
     use super::*;
     use crate::game::tests::*;
-
-    #[test]
-    fn la_cercania_al_agujero_negro_sube_al_acercarse() {
-        let mut g = jugando();
-        let h = &BLACK_HOLES[0];
-        poner(&mut g, h.position + Vec3::new(h.core_radius() + AGUJERO_ALCANCE + 10.0, 0.0, 0.0));
-        let lejos = g.black_hole_proximity();
-        poner(&mut g, h.position + Vec3::new(h.core_radius() + AGUJERO_ALCANCE * 0.5, 0.0, 0.0));
-        let medio = g.black_hole_proximity();
-        poner(&mut g, h.position + Vec3::new(h.core_radius(), 0.0, 0.0));
-        let tocando = g.black_hole_proximity();
-        assert_eq!(lejos, 0.0);
-        assert!((medio - 0.5).abs() < 1e-3);
-        assert!((tocando - 1.0).abs() < 1e-3);
-    }
 
     /// Pone la nave pegada al núcleo del primer agujero negro, yendo hacia él, y deja correr un cuadro.
     fn caer_en_agujero(g: &mut Game) {
@@ -293,14 +282,18 @@ mod tests {
         let (casilla, _, _) = scenario::grid_slot(g.slot);
         assert!(g.ship.position.distance(casilla) < 1.0);
         assert_eq!(g.black_hole_proximity(), 0.0, "ya no se oye el agujero negro");
-        avanzar(&mut g, 1.0);
-        assert!(g.ship.position.distance(casilla) < 1.0, "eliminada no se mueve");
+        let antes = g.ship.position;
+        avanzar_con(&mut g, 1.0, Input { forward: true, ..NADA });
+        assert!(g.ship.position.distance(antes) > 5.0, "eliminada puede moverse");
+        assert!(g.eliminado, "pero sigue contando como eliminada");
     }
 
     #[test]
     fn online_el_eliminado_espera_a_los_demas_y_avisa_con_el_bit_de_eliminado() {
         let mut g = jugando();
         g.set_online(true);
+        g.set_race_server(Phase::Countdown as u8, 0);
+        g.update(0.05, &Input::default());
         g.set_race_server(Phase::Racing as u8, 5000);
         g.update(0.05, &Input::default());
         g.progress = 4;

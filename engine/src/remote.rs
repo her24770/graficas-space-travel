@@ -3,6 +3,9 @@ use crate::Vec3;
 use std::f32::consts::PI;
 pub const NAME_LEN: usize = 6;
 pub const ELIMINADO: u8 = 0x80;
+pub const SOLO: u8 = 0x40; //juego individual
+pub const ESPERA: u8 = 0x20; // en sala de espera
+pub const PROGRESO: u8 = 0x1F;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RemoteShip {
