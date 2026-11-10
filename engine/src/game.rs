@@ -62,7 +62,7 @@ const PROP_COLISION: f32 = 0.5;
 /// Altura sobre la superficie hasta la que puede haber objetos con los que chocar.
 const PROPS_ALCANCE: f32 = 8.0;
 /// Giro de 180 grados y escala para el modelo, los modelos vienen normalizados a radio 1
-const AJUSTES_NAVE: &[(&str, bool, f32)] = &[("xwing", true, 2.0), ("Spaceship", true, 2.0)];
+const AJUSTES_NAVE: &[(&str, bool, f32)] = &[("xwing", true, 2.0), ("pinkship", true, 2.0)];
 const ESCALA_NAVE: f32 = 1.2;
 
 /// Pantalla en la que está el jugador: el menú de inicio o el juego.
