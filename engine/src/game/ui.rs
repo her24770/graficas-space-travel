@@ -88,6 +88,13 @@ impl Game {
             hud::label(fb, m, m + (4 + i as i32) * line, s, *color, texto);
         }
 
+        if self.modo == Modo::Persecucion {
+            self.draw_persecucion(fb, v, s, m, line);
+            self.draw_minimap(fb, s as i32, m);
+            self.draw_derrota(fb, s);
+            return;
+        }
+
         // Carrera
         let cx = w / 2;
         match self.race.phase {
@@ -112,31 +119,7 @@ impl Game {
         // Marcador del siguiente punto de control (en pantalla o en el borde)
         if self.race.phase == Phase::Racing && self.progress < GATE_COUNT && !self.eliminado {
             let g = self.course[self.progress].pos;
-            let dist = g.distance(self.ship.position);
-            let (cxf, cyf) = (w as f32 / 2.0, h as f32 / 2.0);
-            let (mut x, mut y, dentro) = match raster::project(&v.vp, g, fb.width, fb.height) {
-                Some((x, y, _)) if x > 0.0 && x < w as f32 && y > 0.0 && y < h as f32 => (x, y, true),
-                Some((x, y, _)) => (x, y, false),
-                None => {
-                    // detrás: se apunta al lado contrario para que el jugador gire
-                    let c = v.vp.transform_point(g);
-                    (cxf - c.x.signum() * cxf * 2.0, cyf + c.y.signum() * cyf * 2.0, false)
-                }
-            };
-            if !dentro {
-                let (dx, dy) = (x - cxf, y - cyf);
-                // El margen vertical deja libres el reloj de arriba y la lista y los controles de abajo.
-                let (mx, my) = (4.0 * m as f32, 5.0 * m as f32 + 2.0 * line as f32);
-                let k = ((cxf - mx) / dx.abs().max(1e-3)).min((cyf - my) / dy.abs().max(1e-3));
-                x = cxf + dx * k;
-                y = cyf + dy * k;
-            }
-            let b = 5 * s as i32;
-            for d in 0..b {
-                hud::rect(fb, x as i32 - d, y as i32 - b + d, 2 * d + 1, 1, COLOR_SIGUIENTE);
-                hud::rect(fb, x as i32 - d, y as i32 + b - d, 2 * d + 1, 1, COLOR_SIGUIENTE);
-            }
-            hud::centered(fb, x as i32, y as i32 + b + 3 * s as i32, s, COLOR_SIGUIENTE, &format!("{dist:.0} M"));
+            marcador(fb, v, s, m, g, g.distance(self.ship.position), COLOR_SIGUIENTE);
         }
 
         // Posiciones
@@ -165,6 +148,37 @@ impl Game {
         self.draw_derrota(fb, s);
     }
 
+    /// HUD del modo persecución: tiempo sobrevivido, mejor tiempo, ovnis y una flecha hacia cada uno.
+    pub(super) fn draw_persecucion(&self, fb: &mut Framebuffer, v: &View, s: usize, m: i32, line: i32) {
+        let (w, h) = (fb.width as i32, fb.height as i32);
+        let cx = w / 2;
+        let p = &self.persecucion;
+        hud::centered(fb, cx, m, s * 2, 0xFFFFFF, &fmt_time(p.tiempo));
+        let mejor = self.mejor_persecucion.map_or("MEJOR --".to_string(), |t| format!("MEJOR {}", fmt_time(t)));
+        hud::centered(fb, cx, m + 2 * line + 4 * s as i32, s, 0x90A4AE, &mejor);
+        let siguiente = match p.proximo_en() {
+            Some(t) if !p.en_gracia() => format!("   OTRO EN {:.0}", t.ceil()),
+            _ => String::new(),
+        };
+        hud::centered(fb, cx, m + 3 * line + 4 * s as i32, s, 0xEF9A9A, &format!("OVNIS {}{}", p.ovnis.len(), siguiente));
+
+        if self.derrota.is_none() {
+            let dist = p.distancia_minima(self.ship.position).unwrap_or(f32::MAX);
+            if p.en_gracia() {
+                let n = p.segundos_de_gracia().ceil().max(1.0);
+                // Arriba, para no tapar al ovni, que ahora aparece de frente.
+                hud::centered(fb, cx, m + 5 * line + 8 * s as i32, s * 3, 0xEF5350, "HUYE!");
+                hud::centered(fb, cx, m + 5 * line + 8 * s as i32 + 30 * s as i32, s, 0xFFFFFF, &format!("EL OVNI SALE EN {n:.0}"));
+            } else if dist < chase::CAZADOR_PELIGRO && (self.time * 4.0) as i32 % 2 == 0 {
+                hud::centered(fb, cx, m + 5 * line + 8 * s as i32, s * 2, 0xEF5350, "PELIGRO");
+            }
+            for o in &p.ovnis {
+                marcador(fb, v, s, m, o.position, o.position.distance(self.ship.position), 0xEF5350);
+            }
+        }
+        hud::label(fb, m, h - m - line, s, 0x78909C, "ENTER REINICIAR   M MENU");
+    }
+
     /// Vista de "perdiste" con la causa y qué pasa después.
     pub(super) fn draw_derrota(&self, fb: &mut Framebuffer, s: usize) {
         let Some(d) = &self.derrota else { return };
@@ -173,12 +187,16 @@ impl Game {
         hud::shade_rect(fb, 0, 0, fb.width as i32, h, 0x000000, 130);
         hud::centered(fb, cx, h / 3, s * 4, 0xEF5350, "PERDISTE");
         hud::centered(fb, cx, h / 3 + 40 * si, s, 0xFFFFFF, d.causa.mensaje());
-        let pie = if d.elimina {
+        let pie = if self.modo == Modo::Persecucion {
+            let mejor = self.mejor_persecucion.map_or(String::new(), |t| format!("   MEJOR {}", fmt_time(t)));
+            format!("SOBREVIVISTE {}{}", fmt_time(self.persecucion.tiempo), mejor)
+        } else if d.elimina {
             let t = self.muerte_time.unwrap_or(self.race.time);
             format!("PASASTE {}/{} AROS EN {}", self.progress, GATE_COUNT, fmt_time(t))
         } else {
             "VOLVIENDO AL MAPA...".to_string()
         };
+        let pie = if self.modo == Modo::Persecucion { format!("{pie}   REINICIANDO...") } else { pie };
         hud::centered(fb, cx, h / 3 + 60 * si, s, 0x90A4AE, &pie);
     }
 
@@ -207,6 +225,7 @@ impl Game {
             ("FLECHAS", "INCLINAR LA NARIZ"),
             ("ESPACIO", "FRENAR"),
             ("ENTER", "EMPEZAR CARRERA"),
+            ("P", "PERSECUCION (SOLO)"),
             ("TAB", "CAMBIAR DE NAVE"),
             ("M", "VOLVER AL MENU"),
             ("G", "GRAVEDAD SI O NO"),
@@ -218,7 +237,7 @@ impl Game {
         let col = 9;
         let cols = controles.iter().map(|(_, a)| col + a.len()).max().unwrap_or(col);
         let (pw, ph) = (cols as i32 * 6 * si + 2 * pad, (controles.len() as i32 + 1) * line + 2 * pad);
-        let py = h * 3 / 10;
+        let py = h * 13 / 50;
         hud::panel(fb, m, py, pw, ph);
         hud::label(fb, m + pad, py + pad, s, gris, "CONTROLES");
         for (i, (tecla, accion)) in controles.iter().enumerate() {
@@ -256,7 +275,12 @@ impl Game {
 
         // Invitación a jugar
         let color = if (self.time * 2.0) as i32 % 2 == 0 { oro } else { 0xFFF59D };
-        hud::centered(fb, cx, h - m - 30 * si, s * 3, color, "ENTER = JUGAR");
+        hud::centered(fb, cx, h - m - 40 * si, s * 2, color, "ENTER = CARRERA");
+        if self.online {
+            hud::centered(fb, cx, h - m - 16 * si, s, 0x78909C, "PERSECUCION SOLO SIN CONEXION");
+        } else {
+            hud::centered(fb, cx, h - m - 20 * si, s * 2, 0xEF9A9A, "P = PERSECUCION");
+        }
     }
 
     /// Mapa visto desde arriba: sol, órbitas, planetas, circuito y jugadores.
@@ -283,7 +307,8 @@ impl Game {
             hud::dot(fb, x, y, ((pl.radius / ALCANCE * size as f32) as i32).max(s), pl.material.tint());
         }
         let racing = self.race.phase == Phase::Racing;
-        for (i, g) in self.course.iter().enumerate() {
+        let aros = if self.modo == Modo::Persecucion { 0 } else { self.course.len() };
+        for (i, g) in self.course.iter().enumerate().take(aros) {
             let (x, y) = to_map(g.pos);
             let (color, r) = if racing && i == self.progress { (COLOR_SIGUIENTE, s) } else if i < self.progress && racing { (0x2E7D32, 1) } else { (COLOR_PUNTO, 1) };
             hud::rect(fb, x - r, y - r, 2 * r + 1, 2 * r + 1, color);
@@ -292,6 +317,14 @@ impl Game {
             let (x, y) = to_map(r.shown.position);
             if en_mapa(x, y) {
                 hud::dot(fb, x, y, s + 1, COLORES_JUGADORES[r.shown.id as usize % COLORES_JUGADORES.len()]);
+            }
+        }
+        if self.modo == Modo::Persecucion {
+            for o in &self.persecucion.ovnis {
+                let (x, y) = to_map(o.position);
+                if en_mapa(x, y) {
+                    hud::dot(fb, x, y, s + 2, 0xEF5350);
+                }
             }
         }
         // Mi nave: punto blanco con una línea hacia donde mira.
@@ -303,6 +336,33 @@ impl Game {
         }
         hud::dot(fb, x, y, s + 1, 0xFFFFFF);
     }
+}
+
+fn marcador(fb: &mut Framebuffer, v: &View, s: usize, m: i32, objetivo: Vec3, dist: f32, color: u32) {
+    let (w, h) = (fb.width as i32, fb.height as i32);
+    let line = 10 * s as i32;
+    let (cxf, cyf) = (w as f32 / 2.0, h as f32 / 2.0);
+    let (mut x, mut y, dentro) = match raster::project(&v.vp, objetivo, fb.width, fb.height) {
+        Some((x, y, _)) if x > 0.0 && x < w as f32 && y > 0.0 && y < h as f32 => (x, y, true),
+        Some((x, y, _)) => (x, y, false),
+        None => {
+            let c = v.vp.transform_point(objetivo);
+            (cxf - c.x.signum() * cxf * 2.0, cyf + c.y.signum() * cyf * 2.0, false)
+        }
+    };
+    if !dentro {
+        let (dx, dy) = (x - cxf, y - cyf);
+        let (mx, my) = (4.0 * m as f32, 5.0 * m as f32 + 2.0 * line as f32);
+        let k = ((cxf - mx) / dx.abs().max(1e-3)).min((cyf - my) / dy.abs().max(1e-3));
+        x = cxf + dx * k;
+        y = cyf + dy * k;
+    }
+    let b = 5 * s as i32;
+    for d in 0..b {
+        hud::rect(fb, x as i32 - d, y as i32 - b + d, 2 * d + 1, 1, color);
+        hud::rect(fb, x as i32 - d, y as i32 + b - d, 2 * d + 1, 1, color);
+    }
+    hud::centered(fb, x as i32, y as i32 + b + 3 * s as i32, s, color, &format!("{dist:.0} M"));
 }
 
 /// ¿Hay algo dibujado delante de la esfera (`pos`, `radius`) en el píxel (x, y)?

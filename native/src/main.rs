@@ -65,6 +65,7 @@ fn main() {
             (Key::O, bits::ORBIT),
             (Key::V, bits::VIEW),
             (Key::R, bits::RESEED),
+            (Key::P, bits::CHASE),
         ] {
             if window.is_key_pressed(tecla, KeyRepeat::No) {
                 b |= bit;

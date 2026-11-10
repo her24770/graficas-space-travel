@@ -20,9 +20,13 @@ use crate::{
 };
 use std::f32::consts::PI;
 
+mod chase;
 mod collisions;
 mod render;
 mod ui;
+
+use chase::Persecucion;
+pub use chase::Modo;
 
 const FOV_Y: f32 = 60.0 * PI / 180.0;
 const FONDO: u32 = 0x02020A;
@@ -58,7 +62,7 @@ const PROP_COLISION: f32 = 0.5;
 /// Altura sobre la superficie hasta la que puede haber objetos con los que chocar.
 const PROPS_ALCANCE: f32 = 8.0;
 /// Giro de 180 grados y escala para el modelo, los modelos vienen normalizados a radio 1
-const AJUSTES_NAVE: &[(&str, bool, f32)] = &[("xwing", true, 2.0)];
+const AJUSTES_NAVE: &[(&str, bool, f32)] = &[("xwing", true, 2.0), ("Spaceship", true, 2.0)];
 const ESCALA_NAVE: f32 = 1.2;
 
 /// Pantalla en la que está el jugador: el menú de inicio o el juego.
@@ -177,6 +181,11 @@ pub struct Game {
     derrota: Option<Derrota>,
     /// Perdió en plena carrera: se queda quieta hasta la siguiente carrera o el menú.
     eliminado: bool,
+    /// modo carrera o persecucion
+    modo: Modo,
+    persecucion: Persecucion,
+    /// Mejor tiempo sobrevivido en persecución.
+    mejor_persecucion: Option<f32>,
     /// Segundos de carrera en que quedó eliminado.
     muerte_time: Option<f32>,
     slot: usize,
@@ -330,6 +339,9 @@ impl Game {
             finish_time: None,
             derrota: None,
             eliminado: false,
+            modo: Modo::Carrera,
+            persecucion: Persecucion::new(),
+            mejor_persecucion: None,
             muerte_time: None,
             slot: 0,
             my_id: None,
@@ -472,15 +484,21 @@ impl Game {
             }
             if input.start {
                 self.screen = Screen::Playing;
+                self.modo = Modo::Carrera;
+            } else if input.chase && !self.online {
+                self.screen = Screen::Playing;
+                self.iniciar_persecucion();
             }
         } else {
             if input.cycle_model {
                 self.next_model(1);
             }
-            if input.menu && matches!(self.race.phase, Phase::Lobby | Phase::Results) {
+            if input.menu && (self.modo == Modo::Persecucion || matches!(self.race.phase, Phase::Lobby | Phase::Results)) {
                 self.back_to_menu();
             } else if input.start {
-                if self.online {
+                if self.modo == Modo::Persecucion {
+                    self.iniciar_persecucion();
+                } else if self.online {
                     self.start_request = true;
                 } else {
                     self.race.start_local();
@@ -516,6 +534,7 @@ impl Game {
                 self.muerte_time = None;
                 self.derrota = None;
                 self.screen = Screen::Playing; // si alguien larga, nadie se queda en el menú
+                self.modo = Modo::Carrera;
                 self.place_on_grid();
             }
             self.last_phase = self.race.phase;
@@ -525,7 +544,11 @@ impl Game {
         if let Some(d) = self.derrota {
             if self.time - d.desde >= DERROTA_S {
                 self.derrota = None;
-                self.place_on_grid();
+                if self.modo == Modo::Persecucion {
+                    self.iniciar_persecucion();
+                } else {
+                    self.place_on_grid();
+                }
             }
         }
 
@@ -546,6 +569,9 @@ impl Game {
                 }
             }
         }
+        if self.modo == Modo::Persecucion && self.screen == Screen::Playing && !quieta {
+            self.update_persecucion(dt);
+        }
         match self.orbit {
             // En órbita la cámara va detrás y por encima, mirando hacia el planeta para que se vea.
             Some(o) => {
@@ -563,6 +589,7 @@ impl Game {
 
     fn back_to_menu(&mut self) {
         self.screen = Screen::Menu;
+        self.modo = Modo::Carrera;
         self.derrota = None;
         self.eliminado = false;
         self.muerte_time = None;
@@ -634,6 +661,9 @@ impl Game {
 
     pub fn set_online(&mut self, online: bool) {
         self.online = online;
+        if online && self.modo == Modo::Persecucion {
+            self.back_to_menu();
+        }
         if !online {
             self.remotes.clear();
             self.race.reset();
@@ -728,7 +758,7 @@ mod tests {
     pub(crate) const NADA: Input = Input {
         forward: false, backward: false, yaw_left: false, yaw_right: false, pitch_up: false, pitch_down: false,
         brake: false, cycle_model: false, start: false, menu: false, toggle_gravity: false, toggle_orbit: false,
-        toggle_view: false, reseed: false,
+        toggle_view: false, reseed: false, chase: false,
     };
 
     /// Coloca la nave en `pos`, quieta, con la cámara detrás.
