@@ -9,6 +9,7 @@ pub mod game;
 pub mod hud;
 pub mod input;
 pub mod math;
+pub mod normalmap;
 pub mod obj;
 pub mod orbit;
 pub mod physics;

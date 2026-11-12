@@ -4,7 +4,7 @@ use crate::{
     frustum::Frustum,
     hud,
     input::Input,
-    obj,
+    normalmap, obj,
     orbit::{self, Orbit},
     physics::{self, Body},
     procedural,
@@ -323,6 +323,7 @@ impl Game {
             .collect();
         let hole_meshes = BLACK_HOLES.iter().map(|h| modelo_aparte(h.model).unwrap_or_else(|| procedural::torus(1.0, 0.2, 28, 8))).collect();
 
+        normalmap::warm_up();
         let mut game = Self {
             time: 0.0,
             world_time: 0.0,

@@ -62,7 +62,7 @@ impl Game {
         let v = View {
             vp,
             frustum: &frustum,
-            scene: Scene { time: self.time, light_pos: Vec3::ZERO, eye },
+            scene: Scene { time: self.time, light_pos: Vec3::ZERO, eye, normal_maps: true },
             focal: fb.height as f32 * 0.5 / (FOV_Y * 0.5).tan(),
             eye,
         };
