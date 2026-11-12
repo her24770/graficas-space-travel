@@ -16,7 +16,7 @@ function medidas() {
 // Mismos bits que engine::input::bits
 const TECLAS = {
   KeyW: 1, KeyS: 2, KeyA: 4, KeyD: 8, ArrowLeft: 4, ArrowRight: 8,
-  ArrowUp: 16, ArrowDown: 32, Space: 64,
+  ArrowUp: 16, ArrowDown: 32, Space: 64, KeyF: 32768,
 };
 // Teclas de una sola pulsación (mismos bits que engine::input::bits)
 const UNA_VEZ = { Tab: 128, Enter: 256, KeyM: 512, KeyG: 1024, KeyO: 2048, KeyV: 4096, KeyR: 8192, KeyP: 16384 };
@@ -37,7 +37,6 @@ addEventListener("keydown", (e) => {
     return;
   }
   if (e.code in UNA_VEZ) { if (!e.repeat) unaVez |= UNA_VEZ[e.code]; e.preventDefault(); return; }
-  if (e.code === "KeyF") { if (!e.repeat) pantallaCompleta(); e.preventDefault(); return; }
   if (e.code in TECLAS) { presionadas |= TECLAS[e.code]; e.preventDefault(); }
 });
 addEventListener("keyup", (e) => {

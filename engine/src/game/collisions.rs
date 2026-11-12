@@ -182,6 +182,35 @@ impl Game {
         }
     }
 
+    /// Los disparos sueltan chispas al chocar con algo
+    pub(super) fn shots_vs_bodies(&mut self, dt: f32) {
+        if self.shots.is_empty() {
+            return;
+        }
+        let t = self.world_time;
+        let mut solidos: Vec<(Vec3, f32, Vec3)> =
+            self.bodies().iter().enumerate().map(|(i, b)| (b.center, Self::max_surface(i), b.velocity)).collect();
+        for p in PLANETS.iter() {
+            if let Some(m) = &p.moon {
+                solidos.push((scenario::moon_position(p, m, t), m.size, scenario::moon_velocity(p, m, t)));
+            }
+        }
+        let mut impactos = Vec::new();
+        self.shots.retain(|s| {
+            let (a, b) = s.tramo(dt);
+            match solidos.iter().find(|(c, r, _)| shots::segment_hits_sphere(a, b, *c, *r)) {
+                Some(&(c, _, vel)) => {
+                    impactos.push((b, (b - c).normalize(), vel));
+                    false
+                }
+                None => true,
+            }
+        });
+        for (pos, normal, vel) in impactos {
+            self.sparks.burst(pos, normal, vel, 4.0);
+        }
+    }
+
     pub(super) fn registrar_choque(&mut self, body: &'static str, object: Option<&'static str>, c: physics::Contact) {
         // Sin chispas contra el agujero negro ni el ovni: tienen sonido propio.
         if body != "AGUJERO NEGRO" && body != "OVNI" {

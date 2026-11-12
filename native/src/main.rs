@@ -8,7 +8,7 @@ use std::time::Instant;
 /// al agrandarla o ponerla en pantalla completa se ve nítida sin volverse lenta.
 const ALTO_INTERNO: usize = 540;
 
-const TECLAS: [(Key, u32); 9] = [
+const TECLAS: [(Key, u32); 10] = [
     (Key::W, bits::FORWARD),
     (Key::S, bits::BACKWARD),
     (Key::A, bits::YAW_LEFT),
@@ -18,6 +18,7 @@ const TECLAS: [(Key, u32); 9] = [
     (Key::Up, bits::PITCH_UP),
     (Key::Down, bits::PITCH_DOWN),
     (Key::Space, bits::BRAKE),
+    (Key::F, bits::FIRE),
 ];
 
 fn medidas(ventana: (usize, usize)) -> (usize, usize) {

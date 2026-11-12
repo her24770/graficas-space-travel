@@ -46,10 +46,10 @@ La primera vez tarda unos minutos (instala `wasm-bindgen-cli`); después queda e
 | `V` | Primera / tercera persona |
 | `R` | Nueva semilla: reacomoda los objetos sobre los planetas |
 | `Tab` | Cambiar de modelo de nave |
-| `F` | Pantalla completa (web) |
+| `F` (mantener) | Disparar |
 | `Esc` | Salir (solo nativo) |
 
-**Pantalla completa.** La ventana se puede agrandar y el juego se adapta: dibuja a una altura fija (540 px) y el ancho sigue la proporción de la ventana. En el navegador usa `F`, doble clic o `F11`. En nativo, el botón verde de la ventana (macOS) o maximizarla; el sistema no permite un modo de pantalla completa propio con `minifb`.
+**Pantalla completa.** La ventana se puede agrandar y el juego se adapta: dibuja a una altura fija (540 px) y el ancho sigue la proporción de la ventana. En el navegador usa doble clic o `F11`. En nativo, el botón verde de la ventana (macOS) o maximizarla; el sistema no permite un modo de pantalla completa propio con `minifb`.
 
 ## Menú y sala de espera
 
@@ -77,7 +77,7 @@ Un circuito de 10 puntos de control (anillos) que serpentea entre las órbitas d
 
 1. `Enter` inicia la cuenta regresiva: todos van a su casilla de salida y esperan.
 2. Se cruzan los puntos **en orden**; gana quien completa los 10 primero.
-3. Si chocas con un agujero negro o un ovni, quedas **eliminado**: ves el cartel de "perdiste" con los aros y el tiempo que llevabas, y vuelves a la sala de espera, donde puedes volar libre mientras los demás terminan. Sales en la tabla como eliminado, pero los que siguen corriendo ya no ven tu nave.
+3. Si chocas con un agujero negro o un ovni, o tu vida llega a 0, quedas **eliminado**: ves el cartel de "perdiste" con los aros y el tiempo que llevabas, y vuelves a la sala de espera, donde puedes volar libre mientras los demás terminan. Sales en la tabla como eliminado, pero los que siguen corriendo ya no ven tu nave.
 4. Al terminar todos aparecen los resultados; `Enter` da la revancha.
 
 En pantalla: velocidad, triángulos dibujados y objetos visibles (frustum culling), posiciones, minimapa del sistema, nombres y distancias de los planetas. Las esferas cambian de detalle según la distancia (LOD).
@@ -87,11 +87,13 @@ Sin servidor la carrera funciona igual, tú solo.
 ## Física y vistas
 
 - **Gravedad.** El sol y cada planeta atraen la nave con `g·R²/d²` (`g` = gravedad en su superficie). El motor de la nave siempre es más fuerte que cualquier gravedad, así que siempre se puede escapar (se comprueba al compilar).
+- **Vida.** Cada nave empieza con 100 %. Chocar contra el sol, un planeta, una luna, un meteorito o un objeto de superficie quita entre 3 y 30 puntos según la velocidad del golpe (un mismo choque no descuenta dos veces). En 0 la nave queda destruida y pierdes igual que con un agujero negro o un ovni, que siguen eliminando al instante. Tu vida se ve en una barra arriba a la izquierda y la de cada rival en una barrita sobre su nave; al reaparecer vuelve al 100 %.
 - **Colisiones.** La nave no atraviesa el sol ni los planetas: choca contra la superficie **con su relieve**, rebota y se frena al deslizar. Un planeta en movimiento arrastra a la nave apoyada en él. En pantalla aparece `COLISION: <cuerpo>`.
 - **Modo órbita (`O`).** Cerca de un cuerpo, la nave entra en órbita circular a la velocidad que da su gravedad (`v = √(g·R²/r)`). Los controles pasan a ser locales a ese cuerpo: `↑`/`↓` suben o bajan la órbita, `W`/`S` la aceleran o frenan y `A`/`D` giran su plano. `O` otra vez sale conservando la velocidad.
 - **Primera persona (`V`).** La cámara va en la cabina y la nave propia no se dibuja, así nunca tapa la vista (no depende del modelo).
 - **Relieve real.** Los planetas rocosos y de hielo tienen montañas de verdad: los vértices de la esfera se desplazan con el mismo ruido que pinta sus colores. Los gaseosos y el sol son lisos.
 - **Mapa de normales.** Los planetas rocosos (FERRO, AQUA) y de hielo (GLACIA) tienen, además de sus montañas de geometría, relieve fino que la malla no tiene: lomas y cordilleras en la roca, fracturas en el hielo. Es mapeo de normales hecho en el rasterizador de software ([`normalmap.rs`](engine/src/normalmap.rs)): textura 1024×512 de normales en espacio tangente (horneada al arrancar desde un campo de alturas con ruido), coordenadas esféricas `u`/`v`, tangente por vértice interpolada con corrección de perspectiva, base TBN en el fragment shader, mipmaps y muestreo trilineal con el nivel calculado por triángulo (de lejos el relieve se aplana en vez de centellear). El mar queda liso. Siempre está activo; no agrega triángulos porque el detalle sale del sombreado, no de la geometría.
+- **Luna.** AQUA tiene una luna (`assets/props/luna.obj`, definida con `moon` en [`scenario.rs`](engine/src/scenario.rs)) que orbita al planeta en un plano inclinado y gira sobre sí misma, con su propio shader de roca lunar (polvo, mares y cráteres). Es sólida: la nave choca contra ella.
 - **Objetos de superficie.** Se reparten solos sobre los planetas con una **semilla** y **ruido** (bosques en tierra baja, rocas en montañas, nunca en el mar), parados perpendiculares al suelo y girando con el planeta. Ver [assets/props/README.md](assets/props/README.md).
 
 ## Parámetros para la demo

@@ -244,7 +244,7 @@ impl Game {
             ("O", "ORBITAR PLANETA"),
             ("V", "PRIMERA PERSONA"),
             ("R", "NUEVA SEMILLA"),
-            ("F", "PANTALLA COMPLETA"),
+            ("F", "DISPARAR"),
         ];
         let col = 9;
         let cols = controles.iter().map(|(_, a)| col + a.len()).max().unwrap_or(col);

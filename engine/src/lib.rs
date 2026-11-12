@@ -22,6 +22,7 @@ pub mod rng;
 pub mod scenario;
 pub mod shaders;
 pub mod ship;
+pub mod shots;
 pub mod sparks;
 pub mod terrain;
 

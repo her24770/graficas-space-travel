@@ -15,6 +15,7 @@ use crate::{
     rng::Rng,
     scenario::{self, Gate, BLACK_HOLES, GATE_COUNT, PLANETS, PROPS_SEED, SUN_GRAVITY, SUN_RADIUS, UFOS},
     shaders::{Material, Scene},
+    shots::{self, Shots},
     sparks::Sparks,
     terrain, Framebuffer, Mat4, Mesh, Ship, Vec3,
 };
@@ -57,6 +58,8 @@ const DANO_MIN: f32 = 3.0;
 const DANO_MAX: f32 = 30.0;
 /// Tras un golpe, segundos sin recibir otro: un mismo choque no descuenta vida varias veces.
 const INVULNERABLE_S: f32 = 0.6;
+/// Distancia delante del centro de la nave de la que sale el disparo (la punta del modelo).
+const DISPARO_SALIDA: f32 = 2.5;
 /// Cuánto dura el cartel de "perdiste" antes de reaparecer
 const DERROTA_S: f32 = 4.0;
 /// Se puede entrar en órbita a menos de esta altura sobre la superficie (en radios del cuerpo).
@@ -235,6 +238,7 @@ pub struct Game {
     orbit: Option<Orbit>,
     collisions: Vec<CollisionEvent>,
     sparks: Sparks,
+    shots: Shots,
     /// Aros cruzados
     gates_passed: u32,
     /// Aviso en pantalla: texto, color y hasta cuándo (segundos de `time`).
@@ -398,6 +402,7 @@ impl Game {
             orbit: None,
             collisions: Vec::new(),
             sparks: Sparks::new(),
+            shots: Shots::new(),
             gates_passed: 0,
             notice: None,
         };
@@ -414,6 +419,7 @@ impl Game {
         self.orbit = None;
         self.vida = VIDA_MAX;
         self.invulnerable_hasta = 0.0;
+        self.shots.clear();
     }
 
     fn place_props(seed: u64) -> Vec<Vec<PropInstance>> {
@@ -615,6 +621,12 @@ impl Game {
                 }
             }
         }
+        if input.fire && self.screen == Screen::Playing && !quieta {
+            let f = self.ship.forward();
+            self.shots.fire(self.ship.position + f * DISPARO_SALIDA, f, self.ship.velocity);
+        }
+        self.shots.update(dt);
+        self.shots_vs_bodies(dt);
         if self.modo == Modo::Persecucion && self.screen == Screen::Playing && !quieta {
             self.update_persecucion(dt);
         }
@@ -837,7 +849,7 @@ mod tests {
     pub(crate) const NADA: Input = Input {
         forward: false, backward: false, yaw_left: false, yaw_right: false, pitch_up: false, pitch_down: false,
         brake: false, cycle_model: false, start: false, menu: false, toggle_gravity: false, toggle_orbit: false,
-        toggle_view: false, reseed: false, chase: false,
+        toggle_view: false, reseed: false, chase: false, fire: false,
     };
 
     /// Coloca la nave en `pos`, quieta, con la cámara detrás.

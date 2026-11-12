@@ -196,6 +196,7 @@ impl Game {
                 self.draw_object(fb, &v, &mut st, mesh, &model, self.ship.position, escala, &material);
             }
             self.sparks.draw(fb, &v.vp);
+            self.shots.draw(fb, &v.vp);
             self.draw_hud(fb, &v, &st);
         }
         st

@@ -20,6 +20,8 @@ pub mod bits {
     pub const VIEW: u32 = 4096;
     pub const RESEED: u32 = 8192;
     pub const CHASE: u32 = 16384;
+    /// Mientras se mantiene presionada (F) la nave dispara.
+    pub const FIRE: u32 = 32768;
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -39,6 +41,7 @@ pub struct Input {
     pub toggle_view: bool,
     pub reseed: bool,
     pub chase: bool,
+    pub fire: bool,
 }
 
 impl Input {
@@ -59,6 +62,7 @@ impl Input {
             toggle_view: b & bits::VIEW != 0,
             reseed: b & bits::RESEED != 0,
             chase: b & bits::CHASE != 0,
+            fire: b & bits::FIRE != 0,
         }
     }
 }
