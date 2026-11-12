@@ -166,8 +166,20 @@ impl Game {
         let cx = w / 2;
         let p = &self.ataque;
         hud::centered(fb, cx, m, s * 2, 0xFFFFFF, &fmt_time(p.tiempo));
-        let quedan = format!("OVNIS {}/{}", p.ovnis.len(), chase::OVNIS_ATAQUE);
+        let quedan = format!("OVNIS {}/{}   PUNTOS {}", p.ovnis.len(), chase::OVNIS_ATAQUE, p.resultado().puntos);
         hud::centered(fb, cx, m + 2 * line + 4 * s as i32, s, 0xEF9A9A, &quedan);
+        hud::centered(fb, cx, m + 3 * line + 4 * s as i32, s, 0x90A4AE, &format!("MEJOR {}", fmt_resultado(self.mejor_ataque)));
+
+        if p.ganado {
+            let si = s as i32;
+            hud::shade_rect(fb, 0, 0, w, h, 0x000000, 130);
+            hud::centered(fb, cx, h / 3, s * 4, 0x66BB6A, "GANASTE");
+            hud::centered(fb, cx, h / 3 + 40 * si, s, 0xFFFFFF, &format!("DESTRUISTE LOS {} OVNIS EN {}", chase::OVNIS_ATAQUE, fmt_time(p.tiempo)));
+            let puntos = format!("{} PUNTOS ({} POR OVNIS + {} DE BONUS)", p.resultado().puntos, p.destruidos * chase::PUNTOS_POR_OVNI, p.bonus());
+            hud::centered(fb, cx, h / 3 + 55 * si, s, COLOR_SIGUIENTE, &puntos);
+            hud::centered(fb, cx, h / 3 + 75 * si, s, 0x90A4AE, "ENTER JUGAR DE NUEVO   M MENU");
+            return;
+        }
 
         if self.derrota.is_none() {
             let dist = p.distancia_minima(self.ship.position).unwrap_or(f32::MAX);
@@ -202,15 +214,16 @@ impl Game {
         hud::centered(fb, cx, h / 3, s * 4, 0xEF5350, "PERDISTE");
         hud::centered(fb, cx, h / 3 + 40 * si, s, 0xFFFFFF, d.causa.mensaje());
         let pie = if self.modo == Modo::Ataque {
-            format!("DESTRUISTE {}/{} OVNIS EN {}", self.ataque.destruidos, chase::OVNIS_ATAQUE, fmt_time(self.ataque.tiempo))
+            let r = self.ataque.resultado();
+            format!("DESTRUISTE {}/{} OVNIS EN {}   {} PUNTOS", self.ataque.destruidos, chase::OVNIS_ATAQUE, fmt_time(r.tiempo), r.puntos)
         } else if d.elimina {
             let t = self.muerte_time.unwrap_or(self.race.time);
-            format!("PASASTE {}/{} AROS EN {}   VUELVES A LA SALA", self.progress, GATE_COUNT, fmt_time(t))
+            format!("PASASTE {}/{} AROS EN {}", self.progress, GATE_COUNT, fmt_time(t))
         } else {
-            "VOLVIENDO AL MAPA...".to_string()
+            String::new()
         };
-        let pie = if self.modo == Modo::Ataque { format!("{pie}   REINICIANDO...") } else { pie };
         hud::centered(fb, cx, h / 3 + 60 * si, s, 0x90A4AE, &pie);
+        hud::centered(fb, cx, h / 3 + 85 * si, s, COLOR_SIGUIENTE, "ENTER VOLVER A JUGAR   M MENU");
     }
 
     /// Pantalla de inicio: título, vista previa de la nave, controles y estado de la sala.
@@ -404,6 +417,10 @@ pub(super) fn banner(fb: &mut Framebuffer, s: usize, titulo: &str, pista: &str) 
 pub(super) fn fmt_time(secs: f32) -> String {
     let cs = (secs * 100.0) as u32;
     format!("{}:{:02}.{:02}", cs / 6000, cs / 100 % 60, cs % 100)
+}
+
+fn fmt_resultado(r: Option<chase::Resultado>) -> String {
+    r.map_or("--".to_string(), |r| format!("{} PTS {}", r.puntos, fmt_time(r.tiempo)))
 }
 
 /// Barra de vida con cambio de color segun el %

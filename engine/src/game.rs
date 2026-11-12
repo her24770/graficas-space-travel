@@ -26,7 +26,7 @@ mod collisions;
 mod render;
 mod ui;
 
-use chase::Ataque;
+use chase::{Ataque, Resultado};
 pub use chase::Modo;
 
 const FOV_Y: f32 = 60.0 * PI / 180.0;
@@ -60,8 +60,6 @@ const DANO_MAX: f32 = 30.0;
 const INVULNERABLE_S: f32 = 0.6;
 /// Distancia delante del centro de la nave de la que sale el disparo (la punta del modelo).
 const DISPARO_SALIDA: f32 = 2.5;
-/// Cuánto dura el cartel de "perdiste" antes de reaparecer
-const DERROTA_S: f32 = 4.0;
 /// Se puede entrar en órbita a menos de esta altura sobre la superficie (en radios del cuerpo).
 const CAPTURA_RADIOS: f32 = 5.0;
 /// Los objetos de superficie se dibujan a menos de esta distancia (en radios del planeta).
@@ -127,11 +125,10 @@ impl Causa {
     }
 }
 
-/// La nave perdió: se muestra el cartel y la nave queda quieta hasta que termine.
+/// La nave perdió: se muestra el cartel y la nave queda quieta hasta elegir volver a jugar (Enter) o el menú (M).
 #[derive(Clone, Copy, Debug)]
 struct Derrota {
     causa: Causa,
-    desde: f32,
     elimina: bool,
 }
 
@@ -202,6 +199,8 @@ pub struct Game {
     /// modo carrera o ataque
     modo: Modo,
     ataque: Ataque,
+    /// Mejor partida del modo ataque: más puntos y, con empate, menos tiempo.
+    mejor_ataque: Option<Resultado>,
     /// Segundos de carrera en que quedó eliminado.
     muerte_time: Option<f32>,
     /// Vida de la nave (0 a `VIDA_MAX`): baja al chocar y en 0 la nave pierde.
@@ -237,6 +236,7 @@ pub struct Game {
     collisions: Vec<CollisionEvent>,
     sparks: Sparks,
     shots: Shots,
+    disparos_hechos: u32,
     /// Aros cruzados
     gates_passed: u32,
     /// Aviso en pantalla: texto, color y hasta cuándo (segundos de `time`).
@@ -375,6 +375,7 @@ impl Game {
             en_carrera: false,
             modo: Modo::Carrera,
             ataque: Ataque::new(),
+            mejor_ataque: None,
             muerte_time: None,
             vida: VIDA_MAX,
             invulnerable_hasta: 0.0,
@@ -400,6 +401,7 @@ impl Game {
             collisions: Vec::new(),
             sparks: Sparks::new(),
             shots: Shots::new(),
+            disparos_hechos: 0,
             gates_passed: 0,
             notice: None,
         };
@@ -458,6 +460,11 @@ impl Game {
 
     pub fn take_gates_passed(&mut self) -> u32 {
         std::mem::take(&mut self.gates_passed)
+    }
+
+    /// Disparos hechos desde la última llamada (para el sonido del láser).
+    pub fn take_shots_fired(&mut self) -> u32 {
+        std::mem::take(&mut self.disparos_hechos)
     }
 
     fn notice(&mut self, text: String, color: u32) {
@@ -538,11 +545,15 @@ impl Game {
             if input.cycle_model {
                 self.next_model(1);
             }
-            if input.menu && (self.modo == Modo::Ataque || self.esperando() || matches!(self.race.phase, Phase::Lobby | Phase::Results)) {
+            if input.menu && (self.modo == Modo::Ataque || self.derrota.is_some() || self.esperando() || matches!(self.race.phase, Phase::Lobby | Phase::Results)) {
                 self.back_to_menu();
             } else if input.start {
                 if self.modo == Modo::Ataque {
                     self.iniciar_ataque();
+                } else if self.derrota.is_some() {
+                    // Volver a jugar: reaparece en su casilla. Si fue eliminada sigue así hasta la próxima carrera.
+                    self.derrota = None;
+                    self.place_on_grid();
                 } else if self.esperando() {
                     // Hay una carrera en marcha en la que no corro: no se puede empezar otra.
                 } else if self.online {
@@ -590,21 +601,10 @@ impl Game {
             self.last_phase = self.race.phase;
         }
 
-        // Pasado el cartel de "perdiste", vuelve a su casilla de salida, Si fue eliminada se queda quieta hasta la revancha o el menú.
-        if let Some(d) = self.derrota {
-            if self.time - d.desde >= DERROTA_S {
-                self.derrota = None;
-                if self.modo == Modo::Ataque {
-                    self.iniciar_ataque();
-                } else {
-                    self.place_on_grid();
-                }
-            }
-        }
-
         let quieta = self.screen == Screen::Menu
             || (self.en_carrera && self.race.phase == Phase::Countdown)
-            || self.derrota.is_some();
+            || self.derrota.is_some()
+            || (self.modo == Modo::Ataque && self.ataque.ganado);
         match self.orbit.filter(|_| !quieta) {
             Some(o) => self.fly_orbit(o, input, dt),
             None => {
@@ -620,7 +620,9 @@ impl Game {
         }
         if input.fire && self.screen == Screen::Playing && !quieta {
             let f = self.ship.forward();
-            self.shots.fire(self.ship.position + f * DISPARO_SALIDA, f, self.ship.velocity);
+            if self.shots.fire(self.ship.position + f * DISPARO_SALIDA, f, self.ship.velocity) {
+                self.disparos_hechos += 1;
+            }
         }
         self.shots.update(dt);
         if self.modo == Modo::Ataque && self.screen == Screen::Playing {
@@ -651,10 +653,11 @@ impl Game {
         self.derrota = None;
         self.eliminado = false;
         self.muerte_time = None;
+        // Quien sale al menú deja la carrera; si sigue en marcha, al volver espera en la sala.
+        self.en_carrera = false;
         if !self.online {
             self.race.reset();
             self.last_phase = Phase::Lobby;
-            self.en_carrera = false;
             self.progress = 0;
             self.finish_time = None;
         }
@@ -1212,7 +1215,7 @@ mod tests {
 
         // Yo también estoy eliminado: ya no corro, vuelo libre y veo a todos.
         g.derrotar(Causa::Ovni);
-        avanzar(&mut g, DERROTA_S + 0.2);
+        g.update(0.05, &Input { start: true, ..NADA });
         assert!(g.eliminado && g.derrota.is_none());
         let antes = g.ship.position;
         avanzar_con(&mut g, 1.0, Input { forward: true, ..NADA });

@@ -92,6 +92,10 @@ impl App {
         self.game.take_gates_passed()
     }
 
+    pub fn take_shots_fired(&mut self) -> u32 {
+        self.game.take_shots_fired()
+    }
+
     /// Siguiente mensaje que JS debe enviar por el WebSocket (vacío si no hay más).
     pub fn take_outgoing(&mut self) -> Vec<u8> {
         self.outgoing.pop_front().unwrap_or_default()

@@ -261,7 +261,10 @@ impl Game {
             return;
         }
         let elimina = self.modo == Modo::Carrera && self.en_carrera && self.race.phase == Phase::Racing && self.finish_time.is_none() && !self.eliminado;
-        self.derrota = Some(Derrota { causa, desde: self.time, elimina });
+        self.derrota = Some(Derrota { causa, elimina });
+        if self.modo == Modo::Ataque {
+            self.guardar_resultado();
+        }
         self.orbit = None;
         self.ship.velocity = Vec3::ZERO;
         self.vida = 0.0;
@@ -310,7 +313,9 @@ mod tests {
         g.update(0.5, &Input { forward: true, ..Default::default() });
         assert!(g.ship.position.distance(quieta) < 1e-3, "con el cartel la nave no se mueve");
 
-        avanzar(&mut g, DERROTA_S + 0.2);
+        avanzar(&mut g, 5.0);
+        assert!(g.derrota.is_some(), "el cartel espera a que elijas");
+        g.update(0.05, &Input { start: true, ..NADA });
         assert!(g.derrota.is_none());
         let (pos, _, _) = scenario::grid_slot(g.slot);
         assert!(g.ship.position.distance(pos) < 1.0, "reaparece en su casilla de salida");
@@ -344,8 +349,8 @@ mod tests {
         let e = &g.entries()[0];
         assert!(e.eliminado && e.progress == 3 && e.finish_ms > 0);
 
-        // Pasado el cartel vuelve a su casilla de salida, lejos del agujero, y sigue quieta.
-        avanzar(&mut g, DERROTA_S + 0.2);
+        // Con Enter vuelve a su casilla de salida, lejos del agujero.
+        g.update(0.05, &Input { start: true, ..NADA });
         assert!(g.derrota.is_none() && g.eliminado);
         let (casilla, _, _) = scenario::grid_slot(g.slot);
         assert!(g.ship.position.distance(casilla) < 1.0);
@@ -579,7 +584,7 @@ mod tests {
         }
         assert_eq!(g.derrota.map(|d| d.causa), Some(Causa::Destruida));
         assert_eq!(g.local_state().health, 0, "los demás ven la barra vacía");
-        avanzar(&mut g, DERROTA_S + 0.2);
+        g.update(0.05, &Input { start: true, ..NADA });
         assert!(g.derrota.is_none());
         assert_eq!(g.health(), VIDA_MAX, "reaparece con la vida llena");
     }

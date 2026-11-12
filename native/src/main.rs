@@ -78,7 +78,7 @@ fn main() {
         if let Some(s) = sonidos.as_mut() {
             let jugando = game.screen() == engine::Screen::Playing;
             let (cercania_agujero, cercania_ovni) = if jugando { (game.black_hole_proximity(), game.ufo_proximity()) } else { (0.0, 0.0) };
-            s.actualizar(dt, jugando && b & bits::FORWARD != 0, &choques, game.take_gates_passed(), cercania_agujero, cercania_ovni);
+            s.actualizar(dt, jugando && b & bits::FORWARD != 0, &choques, game.take_gates_passed(), game.take_shots_fired(), cercania_agujero, cercania_ovni);
         }
         game.render(&mut fb);
         window
