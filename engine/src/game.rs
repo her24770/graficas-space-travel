@@ -48,6 +48,15 @@ const AGUJERO_ALCANCE: f32 = 160.0;
 const OVNI_ALCANCE: f32 = 100.0;
 /// Segundos que se muestra un aviso en pantalla.
 const AVISO_S: f32 = 2.0;
+/// Vida de la nave al salir (porcentaje).
+const VIDA_MAX: f32 = 100.0;
+/// Daño de un choque contra un planeta, el sol, una luna u objeto: crece con la velocidad de
+/// impacto, entre un mínimo y un máximo (en puntos de vida).
+const DANO_POR_VELOCIDAD: f32 = 0.5;
+const DANO_MIN: f32 = 3.0;
+const DANO_MAX: f32 = 30.0;
+/// Tras un golpe, segundos sin recibir otro: un mismo choque no descuenta vida varias veces.
+const INVULNERABLE_S: f32 = 0.6;
 /// Cuánto dura el cartel de "perdiste" antes de reaparecer
 const DERROTA_S: f32 = 4.0;
 /// Se puede entrar en órbita a menos de esta altura sobre la superficie (en radios del cuerpo).
@@ -101,6 +110,8 @@ pub struct CollisionEvent {
 enum Causa {
     AgujeroNegro,
     Ovni,
+    /// La vida llegó a 0 de tanto chocar.
+    Destruida,
 }
 
 impl Causa {
@@ -108,6 +119,7 @@ impl Causa {
         match self {
             Causa::AgujeroNegro => "CAISTE EN UN AGUJERO NEGRO, YA NO PUEDES ESCAPAR",
             Causa::Ovni => "LOS ALIENS TE RAPTARON, YA NO PUEDES ESCAPAR",
+            Causa::Destruida => "TU NAVE QUEDO DESTRUIDA DE TANTO CHOCAR",
         }
     }
 }
@@ -191,6 +203,10 @@ pub struct Game {
     mejor_persecucion: Option<f32>,
     /// Segundos de carrera en que quedó eliminado.
     muerte_time: Option<f32>,
+    /// Vida de la nave (0 a `VIDA_MAX`): baja al chocar y en 0 la nave pierde.
+    vida: f32,
+    /// Hasta cuándo (segundos de `time`) un choque no quita vida.
+    invulnerable_hasta: f32,
     slot: usize,
     my_id: Option<u32>,
     /// Mi nombre (ASCII, ceros al final); todo ceros = sin nombre.
@@ -359,6 +375,8 @@ impl Game {
             persecucion: Persecucion::new(),
             mejor_persecucion: None,
             muerte_time: None,
+            vida: VIDA_MAX,
+            invulnerable_hasta: 0.0,
             slot: 0,
             my_id: None,
             name: [0; NAME_LEN],
@@ -394,6 +412,8 @@ impl Game {
         self.ship.reset(pos, yaw, pitch);
         self.camera = ChaseCamera::new(&self.ship);
         self.orbit = None;
+        self.vida = VIDA_MAX;
+        self.invulnerable_hasta = 0.0;
     }
 
     fn place_props(seed: u64) -> Vec<Vec<PropInstance>> {
@@ -416,6 +436,11 @@ impl Game {
 
     pub fn gravity_enabled(&self) -> bool {
         self.gravity_on
+    }
+
+    /// Vida de la nave en porcentaje (0 a 100).
+    pub fn health(&self) -> f32 {
+        self.vida
     }
 
     /// Cuerpo que se está orbitando (0 = sol, 1.. = planetas), si hay.
@@ -696,6 +721,7 @@ impl Game {
                 },
             finish_ms: self.finish_ms(),
             name: self.name,
+            health: self.vida.round().clamp(0.0, VIDA_MAX) as u8,
         }
     }
 
@@ -787,7 +813,7 @@ mod tests {
     use super::*;
 
     pub(crate) fn rival(id: u32, x: f32) -> RemoteShip {
-        RemoteShip { id, position: Vec3::new(x, 0.0, -10.0), yaw: 0.0, pitch: 0.0, model: 0, progress: 0, finish_ms: 0, name: [0; NAME_LEN] }
+        RemoteShip { id, position: Vec3::new(x, 0.0, -10.0), yaw: 0.0, pitch: 0.0, model: 0, progress: 0, finish_ms: 0, name: [0; NAME_LEN], health: 100 }
     }
 
     pub(crate) fn avanzar(g: &mut Game, segundos: f32) {

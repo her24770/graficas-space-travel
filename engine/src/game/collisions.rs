@@ -197,12 +197,33 @@ impl Game {
         if self.collisions.len() > 32 {
             self.collisions.remove(0); // nadie los está leyendo: no crecer sin límite
         }
-        self.notice(format!("COLISION: {}", object.unwrap_or(body)), 0xEF5350);
         match body {
             "AGUJERO NEGRO" => self.derrotar(Causa::AgujeroNegro),
             "OVNI" => self.derrotar(Causa::Ovni),
-            _ => {}
+            _ => {
+                let nombre = object.unwrap_or(body);
+                match self.danar(c.impact_speed) {
+                    Some(dano) => self.notice(format!("COLISION: {nombre}  -{dano:.0}%"), 0xEF5350),
+                    None => self.notice(format!("COLISION: {nombre}"), 0xEF5350),
+                }
+                return;
+            }
         }
+        self.notice(format!("COLISION: {}", object.unwrap_or(body)), 0xEF5350);
+    }
+
+    /// Un choque contra algo sólido quita vida según qué tan fuerte fue.
+    pub(super) fn danar(&mut self, impact_speed: f32) -> Option<f32> {
+        if self.derrota.is_some() || self.time < self.invulnerable_hasta {
+            return None;
+        }
+        let dano = (impact_speed * DANO_POR_VELOCIDAD).clamp(DANO_MIN, DANO_MAX).min(self.vida);
+        self.vida -= dano;
+        self.invulnerable_hasta = self.time + INVULNERABLE_S;
+        if self.vida <= 0.0 {
+            self.derrotar(Causa::Destruida);
+        }
+        Some(dano)
     }
 
     /// La nave perdió. En plena carrera queda eliminada y en la sala o los resultados solo ve el cartel y reaparece en el mapa.
@@ -218,6 +239,7 @@ impl Game {
         }
         self.orbit = None;
         self.ship.velocity = Vec3::ZERO;
+        self.vida = 0.0;
         if elimina {
             self.eliminado = true;
             self.muerte_time = Some(self.race.time);
@@ -513,5 +535,27 @@ mod tests {
         let choques = g.take_collisions();
         assert!(choques.iter().any(|c| c.body == "AQUA"));
         assert!(choques.len() <= 4, "apoyada no debe avisar en cada cuadro: {}", choques.len());
+    }
+
+    #[test]
+    fn chocar_quita_vida_y_en_cero_la_nave_pierde_y_reaparece_con_vida_llena() {
+        let mut g = jugando();
+        let c = physics::Contact { normal: Vec3::Y, impact_speed: 20.0, body_velocity: Vec3::ZERO };
+        g.registrar_choque("AQUA", None, c);
+        assert_eq!(g.health(), VIDA_MAX - 10.0);
+        g.registrar_choque("AQUA", None, c);
+        assert_eq!(g.health(), VIDA_MAX - 10.0, "el mismo choque no descuenta dos veces");
+        for _ in 0..20 {
+            if g.derrota.is_some() {
+                break;
+            }
+            g.time += INVULNERABLE_S;
+            g.registrar_choque("AQUA", None, c);
+        }
+        assert_eq!(g.derrota.map(|d| d.causa), Some(Causa::Destruida));
+        assert_eq!(g.local_state().health, 0, "los demás ven la barra vacía");
+        avanzar(&mut g, DERROTA_S + 0.2);
+        assert!(g.derrota.is_none());
+        assert_eq!(g.health(), VIDA_MAX, "reaparece con la vida llena");
     }
 }

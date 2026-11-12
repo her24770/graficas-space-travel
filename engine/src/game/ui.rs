@@ -57,16 +57,27 @@ impl Game {
                 if en_pantalla && !tapado(fb, &v.vp, v.eye, arriba, 0.0, x, y) {
                     let nombre = nombre_mostrado(&r.shown.name, format!("J{}", r.shown.id));
                     hud::centered(fb, x as i32, y as i32 - 8 * s as i32, s, color_jugador(r.shown.id), &nombre);
+                    // Su vida, en una barrita encima del nombre.
+                    let (bw, bh) = (24 * s as i32, 3 * s as i32);
+                    barra_vida(fb, x as i32 - bw / 2, y as i32 - 8 * s as i32 - bh - 3 * s as i32, bw, bh, r.shown.health as f32 / 100.0);
                 }
             }
         }
 
+        // Vida: barra arriba a la izquierda, con el porcentaje.
+        let si = s as i32;
+        let (bx, bw, bh) = (m + hud::width("VIDA ", s), 70 * si, 7 * si);
+        hud::label(fb, m, m, s, white, "VIDA");
+        barra_vida(fb, bx, m, bw, bh, self.vida / VIDA_MAX);
+        hud::label(fb, bx + bw + 4 * si, m, s, white, &format!("{:.0}%", self.vida));
+
         // Datos de vuelo y de render
-        hud::label(fb, m, m, s, white, &format!("VEL {:.0} U/S", self.ship.speed()));
-        hud::label(fb, m, m + line, s, 0x90A4AE, &format!("TRIANGULOS {}", st.triangles));
-        hud::label(fb, m, m + 2 * line, s, 0x90A4AE, &format!("OBJETOS {}/{}", st.visible, st.total));
+        let m0 = m + line + 2 * si;
+        hud::label(fb, m, m0, s, white, &format!("VEL {:.0} U/S", self.ship.speed()));
+        hud::label(fb, m, m0 + line, s, 0x90A4AE, &format!("TRIANGULOS {}", st.triangles));
+        hud::label(fb, m, m0 + 2 * line, s, 0x90A4AE, &format!("OBJETOS {}/{}", st.visible, st.total));
         let red = if self.online { format!("ONLINE {} JUGADORES", 1 + self.en_linea().count()) } else { "SIN CONEXION".to_string() };
-        hud::label(fb, m, m + 3 * line, s, if self.online { 0x66BB6A } else { 0xEF9A9A }, &red);
+        hud::label(fb, m, m0 + 3 * line, s, if self.online { 0x66BB6A } else { 0xEF9A9A }, &red);
         let vista = match self.view {
             ViewMode::ThirdPerson => "3A PERSONA",
             ViewMode::FirstPerson => "1A PERSONA",
@@ -85,7 +96,7 @@ impl Game {
             }
         }
         for (i, (texto, color)) in filas.iter().enumerate() {
-            hud::label(fb, m, m + (4 + i as i32) * line, s, *color, texto);
+            hud::label(fb, m, m0 + (4 + i as i32) * line, s, *color, texto);
         }
 
         if self.modo == Modo::Persecucion {
@@ -392,6 +403,23 @@ pub(super) fn banner(fb: &mut Framebuffer, s: usize, titulo: &str, pista: &str) 
 pub(super) fn fmt_time(secs: f32) -> String {
     let cs = (secs * 100.0) as u32;
     format!("{}:{:02}.{:02}", cs / 6000, cs / 100 % 60, cs % 100)
+}
+
+/// Barra de vida con cambio de color segun el %
+fn barra_vida(fb: &mut Framebuffer, x: i32, y: i32, w: i32, h: i32, frac: f32) {
+    let frac = frac.clamp(0.0, 1.0);
+    let color = if frac > 0.6 {
+        0x66BB6A
+    } else if frac > 0.3 {
+        0xFFCA28
+    } else {
+        0xEF5350
+    };
+    hud::shade_rect(fb, x, y, w, h, 0x000000, 170);
+    hud::rect(fb, x, y, (w as f32 * frac).round() as i32, h, color);
+    for (rx, ry, rw, rh) in [(x - 1, y - 1, w + 2, 1), (x - 1, y + h, w + 2, 1), (x - 1, y, 1, h), (x + w, y, 1, h)] {
+        hud::rect(fb, rx, ry, rw, rh, 0xCFD8DC);
+    }
 }
 
 #[cfg(test)]
