@@ -66,6 +66,7 @@ pub fn draw_mesh(
                 let base = propio.unwrap_or(color);
                 Material::Metal { color: tint.map_or(base, |t| blend(base, t, FUERZA_TINTE)), tint: None }
             }
+            Material::Flat { .. } if mesh.glow.get(ti) == Some(&true) => Material::Magma,
             Material::Flat { color } => Material::Flat { color: propio.unwrap_or(color) },
             m => m,
         };

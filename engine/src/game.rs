@@ -286,7 +286,11 @@ impl Game {
         if models.is_empty() {
             models.push(Model { name: "cubo (sin modelos)".into(), mesh: Mesh::cube().normalized(), scale: ESCALA_NAVE });
         }
-        let selected = models.iter().position(|m| m.name == "xwing").unwrap_or(0);
+        if let Some(i) = models.iter().position(|m| m.name == "xwing") {
+            let inicial = models.remove(i);
+            models.insert(0, inicial);
+        }
+        let selected = 0;
 
         let mut rng = Rng::new(seed);
         let stars = (0..400)
