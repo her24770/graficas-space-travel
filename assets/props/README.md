@@ -1,23 +1,23 @@
 # Objetos de superficie
 
-Modelos que se reparten solos sobre los planetas (árboles, rocas, cristales, edificios...).
-
-## Cómo agregar uno
-1. En Blender: modelo **parado**, con **Y arriba** y la **base en el suelo** (el origen da igual: se ajusta solo).
-2. **File → Export → Wavefront (.obj)** con **Triangulate Faces**.
-3. Guárdalo aquí con el nombre que pide `engine/src/scenario.rs`. Hoy se usan:
+Modelos que se reparten sobre los planetas. Su posición sale de una semilla y de ruido, así que con la misma semilla siempre quedan en el mismo lugar. En el juego, `R` cambia la semilla.
 
 | Archivo | Planeta | Zona |
 |---|---|---|
 | `arbol.obj` | AQUA | tierra baja |
-| `roca.obj` | AQUA (montañas) y FERRO | montaña / cualquier tierra |
+| `roca.obj` | AQUA y FERRO | montañas en AQUA, cualquier lugar en FERRO |
 | `edificio.obj` | FERRO | tierra baja |
-| `cristal.obj` | GLACIA | cualquier lugar |
+| `hielo1.obj`, `hielo2.obj` | GLACIA | cualquier lugar |
+| `volcan.obj` | IGNIS | cualquier lugar |
 
-Mientras un archivo no exista, en su lugar aparece un **cono de prueba**.
+En esta carpeta también están otros modelos que no van sobre la superficie: `luna.obj`, `anillos.obj` (anillos de TITAN y disco de los agujeros negros), `meteorito.obj` y `ovni.obj`.
 
-## Notas
-- Se escala solo a la altura indicada en `scenario.rs` (`size`), así que no importa el tamaño en Blender.
-- Mantén pocos triángulos (**50 a 300**): se dibujan cientos de copias por planeta.
-- Para cambiar cuántos hay, dónde van, su tamaño o agregar un tipo nuevo, edita `props` del planeta en `engine/src/scenario.rs`.
-- La posición la decide una **semilla**: en el juego se cambia con `R` y todos los objetos se reacomodan.
+## Agregar un objeto
+
+1. En Blender, hacer el modelo parado, con Y hacia arriba y la base en el suelo.
+2. Exportar como `.obj` con Triangulate Faces y guardarlo aquí. Si tiene colores, también su `.mtl`.
+3. Agregarlo en los `props` del planeta en `engine/src/scenario.rs`, con cuántos van, su tamaño y en qué zona.
+
+El modelo se escala a la altura que dice `size`, así que el tamaño en Blender no importa. Si el archivo no existe, se dibuja un cono en su lugar. Es mejor que tenga pocos triángulos (entre 50 y 300), porque se dibujan muchas copias por planeta.
+
+Los materiales que tienen emisión (`Ke`) en el `.mtl` brillan solos, sin depender de la luz. Así se hace la lava de los volcanes.
