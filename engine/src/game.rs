@@ -26,7 +26,7 @@ mod collisions;
 mod render;
 mod ui;
 
-use chase::Persecucion;
+use chase::Ataque;
 pub use chase::Modo;
 
 const FOV_Y: f32 = 60.0 * PI / 180.0;
@@ -196,14 +196,12 @@ pub struct Game {
     derrota: Option<Derrota>,
     /// Perdió en plena carrera: se queda quieta hasta la siguiente carrera o el menú.
     eliminado: bool,
-    /// Entró a la carrera actual por su cuenta regresiva. Quien llega después, o está en persecución
+    /// Entró a la carrera actual por su cuenta regresiva. Quien llega después, o está en el modo ataque
     /// cuando se larga, no corre: espera en la sala a que termine.
     en_carrera: bool,
-    /// modo carrera o persecucion
+    /// modo carrera o ataque
     modo: Modo,
-    persecucion: Persecucion,
-    /// Mejor tiempo sobrevivido en persecución.
-    mejor_persecucion: Option<f32>,
+    ataque: Ataque,
     /// Segundos de carrera en que quedó eliminado.
     muerte_time: Option<f32>,
     /// Vida de la nave (0 a `VIDA_MAX`): baja al chocar y en 0 la nave pierde.
@@ -376,8 +374,7 @@ impl Game {
             eliminado: false,
             en_carrera: false,
             modo: Modo::Carrera,
-            persecucion: Persecucion::new(),
-            mejor_persecucion: None,
+            ataque: Ataque::new(),
             muerte_time: None,
             vida: VIDA_MAX,
             invulnerable_hasta: 0.0,
@@ -535,17 +532,17 @@ impl Game {
                 self.modo = Modo::Carrera;
             } else if input.chase {
                 self.screen = Screen::Playing;
-                self.iniciar_persecucion();
+                self.iniciar_ataque();
             }
         } else {
             if input.cycle_model {
                 self.next_model(1);
             }
-            if input.menu && (self.modo == Modo::Persecucion || self.esperando() || matches!(self.race.phase, Phase::Lobby | Phase::Results)) {
+            if input.menu && (self.modo == Modo::Ataque || self.esperando() || matches!(self.race.phase, Phase::Lobby | Phase::Results)) {
                 self.back_to_menu();
             } else if input.start {
-                if self.modo == Modo::Persecucion {
-                    self.iniciar_persecucion();
+                if self.modo == Modo::Ataque {
+                    self.iniciar_ataque();
                 } else if self.esperando() {
                     // Hay una carrera en marcha en la que no corro: no se puede empezar otra.
                 } else if self.online {
@@ -597,8 +594,8 @@ impl Game {
         if let Some(d) = self.derrota {
             if self.time - d.desde >= DERROTA_S {
                 self.derrota = None;
-                if self.modo == Modo::Persecucion {
-                    self.iniciar_persecucion();
+                if self.modo == Modo::Ataque {
+                    self.iniciar_ataque();
                 } else {
                     self.place_on_grid();
                 }
@@ -626,9 +623,12 @@ impl Game {
             self.shots.fire(self.ship.position + f * DISPARO_SALIDA, f, self.ship.velocity);
         }
         self.shots.update(dt);
+        if self.modo == Modo::Ataque && self.screen == Screen::Playing {
+            self.shots_vs_ovnis(dt);
+        }
         self.shots_vs_bodies(dt);
-        if self.modo == Modo::Persecucion && self.screen == Screen::Playing && !quieta {
-            self.update_persecucion(dt);
+        if self.modo == Modo::Ataque && self.screen == Screen::Playing && !quieta {
+            self.update_ataque(dt);
         }
         match self.orbit {
             // En órbita la cámara va detrás y por encima, mirando hacia el planeta para que se vea.
@@ -684,7 +684,7 @@ impl Game {
     // jugadores conectados en carrera o en sala de espera
     /// Los de mi grupo, para la tabla de la carrera: los que corren (eliminados incluidos) o, si espero, los que esperan.
     fn grupo(&self) -> impl Iterator<Item = &RemotePlayer> {
-        let (solo, espero) = (self.modo == Modo::Persecucion, self.esperando());
+        let (solo, espero) = (self.modo == Modo::Ataque, self.esperando());
         let en_marcha = matches!(self.last_phase, Phase::Countdown | Phase::Racing);
         self.en_linea().filter(move |r| !solo && (!en_marcha || (r.target.progress & ESPERA != 0) == espero))
     }
@@ -724,7 +724,7 @@ impl Game {
             model: self.selected as u8,
             progress: self.progress as u8
                 | if self.eliminado { ELIMINADO } else { 0 }
-                | if self.modo == Modo::Persecucion {
+                | if self.modo == Modo::Ataque {
                     SOLO
                 } else if self.esperando() {
                     ESPERA
@@ -1146,13 +1146,13 @@ mod tests {
     }
 
     #[test]
-    fn la_persecucion_no_se_interrumpe_si_otros_largan_una_carrera_y_no_cuenta_como_tardio() {
+    fn el_ataque_no_se_interrumpe_si_otros_largan_una_carrera_y_no_cuenta_como_tardio() {
         let mut g = Game::new(1);
         g.update(0.05, &Input { chase: true, ..NADA });
         g.set_online(true);
         g.set_race_server(Phase::Countdown as u8, 0);
         g.update(0.05, &Input::default());
-        assert_eq!(g.mode(), Modo::Persecucion, "sigue en persecución");
+        assert_eq!(g.mode(), Modo::Ataque, "sigue en el modo ataque");
         assert!(g.local_state().progress & SOLO != 0);
         let antes = g.ship.position;
         g.update(0.05, &Input { forward: true, ..NADA });
@@ -1163,7 +1163,7 @@ mod tests {
         g.update(0.05, &Input::default());
         g.ship.position = g.course[0].pos;
         g.update(0.05, &Input::default());
-        assert_eq!(g.progress(), 0, "los aros no cuentan en persecución");
+        assert_eq!(g.progress(), 0, "los aros no cuentan en el modo ataque");
 
         // Al salir con la carrera en marcha no entra tarde: queda esperando en la sala.
         g.update(0.05, &Input { menu: true, ..NADA });
@@ -1192,11 +1192,11 @@ mod tests {
         let mut g = Game::new(1);
         g.update(0.05, &Input { chase: true, ..NADA });
         g.set_remote_players(&todos);
-        assert!(ids(&g).is_empty(), "en persecución no se ve a nadie");
+        assert!(ids(&g).is_empty(), "en el modo ataque no se ve a nadie");
 
         let mut g = online_en(Phase::Lobby);
         g.set_remote_players(&todos);
-        assert_eq!(ids(&g), [1, 3], "en la sala se ven todos menos los de persecución");
+        assert_eq!(ids(&g), [1, 3], "en la sala se ven todos menos los del modo ataque");
     }
 
     #[test]

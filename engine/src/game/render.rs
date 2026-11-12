@@ -145,11 +145,11 @@ impl Game {
             self.draw_object(fb, &v, &mut st, mesh, &model, centro, u.size * 1.1, &Material::Ufo);
         }
 
-        // Ovnis modo persecucion
-        if self.modo == Modo::Persecucion && !menu {
+        // Ovnis del modo ataque
+        if self.modo == Modo::Ataque && !menu {
             let r = chase::CAZADOR_RADIO;
             if let Some(mesh) = self.ufo_meshes.first() {
-                for o in &self.persecucion.ovnis {
+                for o in &self.ataque.ovnis {
                     let model = Mat4::translation(o.position) * Mat4::rotation_y(self.time * 2.0) * Mat4::rotation_z(0.25) * Mat4::scale(Vec3::new(r, r, r));
                     self.draw_object(fb, &v, &mut st, mesh, &model, o.position, r * 1.1, &Material::Ufo);
                 }
@@ -159,7 +159,7 @@ impl Game {
         // Puntos de control (en carrera se ven los que faltan; el siguiente resalta)
         let racing = matches!(self.race.phase, Phase::Racing | Phase::Countdown) && !self.esperando();
         let desde = if racing { self.progress } else { 0 };
-        let aros = if self.modo == Modo::Persecucion { self.course.len() } else { 0 };
+        let aros = if self.modo == Modo::Ataque { self.course.len() } else { 0 };
         for (i, g) in self.course.iter().enumerate().skip(desde.max(aros)) {
             let (yaw, pitch) = scenario::orientation(g.dir);
             let model = Mat4::translation(g.pos) * Mat4::rotation_y(yaw) * Mat4::rotation_x(pitch);

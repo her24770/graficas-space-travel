@@ -262,10 +262,6 @@ impl Game {
         }
         let elimina = self.modo == Modo::Carrera && self.en_carrera && self.race.phase == Phase::Racing && self.finish_time.is_none() && !self.eliminado;
         self.derrota = Some(Derrota { causa, desde: self.time, elimina });
-        if self.modo == Modo::Persecucion {
-            let t = self.persecucion.tiempo;
-            self.mejor_persecucion = Some(self.mejor_persecucion.map_or(t, |m| m.max(t)));
-        }
         self.orbit = None;
         self.ship.velocity = Vec3::ZERO;
         self.vida = 0.0;
