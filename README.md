@@ -38,37 +38,40 @@ La primera vez tarda unos minutos (instala `wasm-bindgen-cli`); después queda e
 | `A` / `D` o `←` / `→` | Girar izquierda / derecha |
 | `↑` / `↓` | Subir / bajar la nariz |
 | `Espacio` | Frenar |
-| `Enter` | Jugar (en el menú) · empezar la carrera o la revancha (en la sala) · reiniciar (en persecución) |
-| `P` | Modo persecución, un jugador (en el menú, con o sin conexión) |
-| `M` | Volver al menú (desde la sala, los resultados o la persecución) |
+| `Enter` | Jugar (en el menú) · empezar la carrera o la revancha (en la sala) · reiniciar (en modo ataque) |
+| `P` | Modo ataque, un jugador (en el menú, con o sin conexión) |
+| `M` | Volver al menú (desde la sala, los resultados o el modo ataque) |
 | `G` | Gravedad sí / no |
 | `O` | Entrar o salir de la órbita del planeta (o del sol) más cercano |
 | `V` | Primera / tercera persona |
 | `R` | Nueva semilla: reacomoda los objetos sobre los planetas |
 | `Tab` | Cambiar de modelo de nave |
-| `F` | Pantalla completa (web) |
+| `F` (mantener) | Disparar |
 | `Esc` | Salir (solo nativo) |
 
-**Pantalla completa.** La ventana se puede agrandar y el juego se adapta: dibuja a una altura fija (540 px) y el ancho sigue la proporción de la ventana. En el navegador usa `F`, doble clic o `F11`. En nativo, el botón verde de la ventana (macOS) o maximizarla; el sistema no permite un modo de pantalla completa propio con `minifb`.
+**Pantalla completa.** La ventana se puede agrandar y el juego se adapta: dibuja a una altura fija (540 px) y el ancho sigue la proporción de la ventana. En el navegador usa doble clic o `F11`. En nativo, el botón verde de la ventana (macOS) o maximizarla; el sistema no permite un modo de pantalla completa propio con `minifb`.
 
 ## Menú y sala de espera
 
 1. **Menú de inicio.** Al abrir el juego aparece el menú: la nave está quieta (no se mueve), la cámara recorre el sistema solar y se elige la nave con `A`/`D` o `Tab`. El panel de la derecha muestra si hay conexión y quién está en la sala. `Enter` = jugar.
 2. **Sala de espera.** Después de jugar entras a la sala: todos están en el mismo mapa y pueden **volar libremente** (para practicar o explorar los planetas). Abajo a la izquierda se lista quién está en la sala. **Cualquiera** puede iniciar la carrera con `Enter`; `M` vuelve al menú.
-3. **Carrera.** Al iniciar, **todos los que están en la sala de espera** pasan solos a la cuenta regresiva, se colocan en su casilla de salida y esperan. Después largan. Quien está en el menú o en la persecución no se entera: no corre y no pasa nada.
-4. **Carrera en marcha.** Solo corre quien estaba en la sala al largar. Quien se conecta, o sale del menú o de la persecución, cuando la carrera ya empezó **no entra tarde**: queda en la sala de espera con el aviso `CARRERA EN CURSO` hasta que termine. Mientras tanto solo ve a los que también esperan; los que corren solo ven a los que corren. Los aros no le cuentan y no puede iniciar otra carrera encima.
+3. **Carrera.** Al iniciar, **todos los que están en la sala de espera** pasan solos a la cuenta regresiva, se colocan en su casilla de salida y esperan. Después largan. Quien está en el menú o en el modo ataque no se entera: no corre y no pasa nada.
+4. **Carrera en marcha.** Solo corre quien estaba en la sala al largar. Quien se conecta, o sale del menú o del modo ataque, cuando la carrera ya empezó **no entra tarde**: queda en la sala de espera con el aviso `CARRERA EN CURSO` hasta que termine. Mientras tanto solo ve a los que también esperan; los que corren solo ven a los que corren. Los aros no le cuentan y no puede iniciar otra carrera encima.
+
 5. **Resultados.** Cuando todos terminan aparecen los tiempos. `Enter` = revancha, `M` = menú.
 
-## Modo persecución (un jugador)
+## Modo ataque (un jugador)
 
-Desde el menú, `P` entra a un modo de un jugador, con o sin conexión: un **ovni cazador** aparece de frente, a la vista, y te persigue. Gana el que sobrevive más tiempo; el reloj, tu mejor tiempo y cuántos ovnis hay se ven arriba.
+Desde el menú, `P` entra a un modo de un jugador, con o sin conexión: **5 ovnis cazadores** aparecen juntos delante de la nave y te persiguen. Hay que destruirlos a disparos (`F`); cada disparo suena con un láser. Arriba se ven el reloj, cuántos ovnis quedan, tus puntos y tu mejor partida.
 
-- **Cada 10 s se suma otro ovni**, hasta un máximo de 5, también por delante de la nave. Los nuevos avisan 1 s antes de moverse y salen lentos; los viejos ya van rápidos. Entre ellos no se encimen.
-- El primero espera 3 s para darte ventaja. Cada ovni acelera poco a poco (de 35 a 80 u/s en 90 s; tu nave llega a 90) y gira lento, así que se les puede esquivar.
-- No atraviesan el sol, los planetas ni los agujeros negros: escóndete detrás de un planeta o llévalos hacia ellos.
+- Los ovnis esperan 3 s al inicio para darte ventaja. Después aceleran poco a poco (de 35 a 80 u/s en 90 s; tu nave llega a 90) y giran lento, así que se les puede esquivar. Entre ellos no se enciman.
+- Cada ovni aguanta 6 disparos; su vida se ve en una barrita encima.
+- **Se gana al destruir los 5**: el reloj se detiene y aparece el cartel de victoria. `Enter` juega de nuevo.
+- **Puntos:** 100 por ovni destruido más un bonus por ganar rápido (500 menos 5 por cada segundo, nunca negativo). La **mejor partida** es la de más puntos y, con los mismos puntos, la de menor tiempo; también cuenta si perdiste a medias.
+- No atraviesan el sol, los planetas ni los agujeros negros: puedes esconderte detrás de un planeta, pero chocar contra él te quita vida.
 - Una flecha roja con la distancia señala a cada ovni; avisa de `PELIGRO` si el más cercano se acerca y suena más fuerte cuanto más cerca.
-- **Con conexión** también se juega, y es individual: cada jugador en persecución tiene su propia partida, no ve a nadie y nadie lo ve a él (ni a los otros que persiguen). Es independiente de la carrera: el servidor no lo espera para cerrarla y, si alguien larga una, sigue en la persecución.
-- Si alguno te alcanza (o chocas con un agujero negro u ovni), ves cuánto sobreviviste y la persecución se reinicia sola con un solo ovni. `Enter` reinicia ya, `M` vuelve al menú.
+- **Con conexión** también se juega, y es individual: cada jugador en modo ataque tiene su propia partida, no ve a nadie y nadie lo ve a él. Es independiente de la carrera: el servidor no lo espera para cerrarla y, si alguien larga una, sigue en su partida.
+- Si un ovni te alcanza, chocas con un agujero negro o tu vida llega a 0, aparece el cartel de "perdiste" con cuántos ovnis destruiste y tus puntos. El cartel espera a que elijas: `Enter` vuelve a jugar y `M` vuelve al menú.
 
 ## La carrera
 
@@ -76,7 +79,7 @@ Un circuito de 10 puntos de control (anillos) que serpentea entre las órbitas d
 
 1. `Enter` inicia la cuenta regresiva: todos van a su casilla de salida y esperan.
 2. Se cruzan los puntos **en orden**; gana quien completa los 10 primero.
-3. Si chocas con un agujero negro o un ovni, quedas **eliminado**: ves el cartel de "perdiste" con los aros y el tiempo que llevabas, y vuelves a la sala de espera, donde puedes volar libre mientras los demás terminan. Sales en la tabla como eliminado, pero los que siguen corriendo ya no ven tu nave.
+3. Si chocas con un agujero negro o un ovni, o tu vida llega a 0, quedas **eliminado**: ves durante 5 s el cartel de "perdiste" con los aros y el tiempo que llevabas y vuelves solo a la sala de espera, donde puedes volar libre mientras los demás terminan. Sales en la tabla como eliminado, pero los que siguen corriendo ya no ven tu nave.
 4. Al terminar todos aparecen los resultados; `Enter` da la revancha.
 
 En pantalla: velocidad, triángulos dibujados y objetos visibles (frustum culling), posiciones, minimapa del sistema, nombres y distancias de los planetas. Las esferas cambian de detalle según la distancia (LOD).
@@ -86,10 +89,13 @@ Sin servidor la carrera funciona igual, tú solo.
 ## Física y vistas
 
 - **Gravedad.** El sol y cada planeta atraen la nave con `g·R²/d²` (`g` = gravedad en su superficie). El motor de la nave siempre es más fuerte que cualquier gravedad, así que siempre se puede escapar (se comprueba al compilar).
+- **Vida.** Cada nave empieza con 100 %. Chocar contra el sol, un planeta, una luna, un meteorito o un objeto de superficie quita entre 3 y 30 puntos según la velocidad del golpe (un mismo choque no descuenta dos veces). En 0 la nave queda destruida y pierdes igual que con un agujero negro o un ovni, que siguen eliminando al instante. Tu vida se ve en una barra arriba a la izquierda y la de cada rival en una barrita sobre su nave; al reaparecer vuelve al 100 %.
 - **Colisiones.** La nave no atraviesa el sol ni los planetas: choca contra la superficie **con su relieve**, rebota y se frena al deslizar. Un planeta en movimiento arrastra a la nave apoyada en él. En pantalla aparece `COLISION: <cuerpo>`.
 - **Modo órbita (`O`).** Cerca de un cuerpo, la nave entra en órbita circular a la velocidad que da su gravedad (`v = √(g·R²/r)`). Los controles pasan a ser locales a ese cuerpo: `↑`/`↓` suben o bajan la órbita, `W`/`S` la aceleran o frenan y `A`/`D` giran su plano. `O` otra vez sale conservando la velocidad.
 - **Primera persona (`V`).** La cámara va en la cabina y la nave propia no se dibuja, así nunca tapa la vista (no depende del modelo).
 - **Relieve real.** Los planetas rocosos y de hielo tienen montañas de verdad: los vértices de la esfera se desplazan con el mismo ruido que pinta sus colores. Los gaseosos y el sol son lisos.
+- **Mapa de normales.** Los planetas rocosos (FERRO, AQUA) y de hielo (GLACIA) tienen, además de sus montañas de geometría, relieve fino que la malla no tiene: lomas y cordilleras en la roca, fracturas en el hielo. Es mapeo de normales hecho en el rasterizador de software ([`normalmap.rs`](engine/src/normalmap.rs)): textura 1024×512 de normales en espacio tangente (horneada al arrancar desde un campo de alturas con ruido), coordenadas esféricas `u`/`v`, tangente por vértice interpolada con corrección de perspectiva, base TBN en el fragment shader, mipmaps y muestreo trilineal con el nivel calculado por triángulo (de lejos el relieve se aplana en vez de centellear). El mar queda liso. Siempre está activo; no agrega triángulos porque el detalle sale del sombreado, no de la geometría.
+- **Luna.** AQUA tiene una luna (`assets/props/luna.obj`, definida con `moon` en [`scenario.rs`](engine/src/scenario.rs)) que orbita al planeta en un plano inclinado y gira sobre sí misma, con su propio shader de roca lunar (polvo, mares y cráteres). Es sólida: la nave choca contra ella.
 - **Objetos de superficie.** Se reparten solos sobre los planetas con una **semilla** y **ruido** (bosques en tierra baja, rocas en montañas, nunca en el mar), parados perpendiculares al suelo y girando con el planeta. Ver [assets/props/README.md](assets/props/README.md).
 
 ## Parámetros para la demo

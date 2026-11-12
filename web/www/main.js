@@ -16,7 +16,7 @@ function medidas() {
 // Mismos bits que engine::input::bits
 const TECLAS = {
   KeyW: 1, KeyS: 2, KeyA: 4, KeyD: 8, ArrowLeft: 4, ArrowRight: 8,
-  ArrowUp: 16, ArrowDown: 32, Space: 64,
+  ArrowUp: 16, ArrowDown: 32, Space: 64, KeyF: 32768,
 };
 // Teclas de una sola pulsación (mismos bits que engine::input::bits)
 const UNA_VEZ = { Tab: 128, Enter: 256, KeyM: 512, KeyG: 1024, KeyO: 2048, KeyV: 4096, KeyR: 8192, KeyP: 16384 };
@@ -37,7 +37,6 @@ addEventListener("keydown", (e) => {
     return;
   }
   if (e.code in UNA_VEZ) { if (!e.repeat) unaVez |= UNA_VEZ[e.code]; e.preventDefault(); return; }
-  if (e.code === "KeyF") { if (!e.repeat) pantallaCompleta(); e.preventDefault(); return; }
   if (e.code in TECLAS) { presionadas |= TECLAS[e.code]; e.preventDefault(); }
 });
 addEventListener("keyup", (e) => {
@@ -53,6 +52,7 @@ const VOLUMEN_MOTOR = 0.5;
 const FACTOR_EXPLOSION = 0.5; //fuerza sonido de la explosion
 const ENFRIAMIENTO = 0.15; // s entre choques
 const CONTACTO_NUEVO = 0.5;
+const VOLUMEN_LASER = 0.35;
 const audio = { ctx: null, buffers: {}, motor: null, ultimoChoque: -Infinity, ultimoAgujero: -Infinity };
 
 async function cargarSonido(nombre) {
@@ -80,16 +80,17 @@ async function iniciarAudio() {
   if (audio.ctx) { audio.ctx.resume?.(); return; }
   try {
     audio.ctx = new AudioContext();
-    await Promise.all(["background", "motor", "explosion", "blackhole", "point"].map(cargarSonido));
+    await Promise.all(["background", "motor", "explosion", "blackhole", "point", "laser"].map(cargarSonido));
     reproducir("background", VOLUMEN_MUSICA, true);
   } catch { audio.ctx = null; }
 }
 addEventListener("keydown", iniciarAudio);
 addEventListener("pointerdown", iniciarAudio);
 
-function actualizarAudio(avanzando, eventos, aros) {
+function actualizarAudio(avanzando, eventos, aros, disparos) {
   if (!audio.ctx) return;
   if (aros > 0) reproducir("point", 0.8);
+  if (disparos > 0) reproducir("laser", VOLUMEN_LASER);
   const ahora = audio.ctx.currentTime;
   // Motor: suena mientras se mantiene W y se corta al soltarla.
   if (avanzando && !audio.motor) {
@@ -156,7 +157,7 @@ function loop(now) {
   app.set_input(presionadas | unaVez);
   unaVez = 0;
   app.frame(dt);
-  actualizarAudio((presionadas & 1) !== 0 && !app.in_menu(), app.take_sound_events(), app.take_gates_passed());
+  actualizarAudio((presionadas & 1) !== 0 && !app.in_menu(), app.take_sound_events(), app.take_gates_passed(), app.take_shots_fired());
   for (let m = app.take_outgoing(); m.length; m = app.take_outgoing()) {
     if (socket && socket.readyState === WebSocket.OPEN) socket.send(m);
   }

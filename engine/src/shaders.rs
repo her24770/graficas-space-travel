@@ -1,6 +1,7 @@
 //! Fragment shaders propios: se ejecutan por píxel con la posición, la normal y la
 //! posición local (del objeto) interpoladas. Los planetas usan ruido procedural, así
 //! cada uno tiene identidad visible y su textura gira junto con él.
+use crate::normalmap::{self, Kind};
 use crate::Vec3;
 
 /// Datos de la escena que ven todos los shaders.
@@ -10,15 +11,22 @@ pub struct Scene {
     /// Posición de la luz (el sol).
     pub light_pos: Vec3,
     pub eye: Vec3,
+    /// Aplicar el mapa de normales a los planetas (se puede apagar para comparar).
+    pub normal_maps: bool,
 }
 
 /// Lo que recibe un shader por cada píxel.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Fragment {
     pub world: Vec3,
     pub normal: Vec3,
     /// Posición en el espacio del objeto: sirve de coordenada de textura 3D.
     pub local: Vec3,
+    /// Tangente en el mundo (dirección en que crece `u`), interpolada. Solo la llena el rasterizador
+    /// para materiales con mapa de normales; con ella y `normal` el shader arma la base TBN.
+    pub tangent: Vec3,
+    /// Nivel de mipmap con que muestrear el mapa de normales (lo calcula el rasterizador por triángulo).
+    pub lod: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -47,9 +55,21 @@ pub enum Material {
     Ufo,
     /// Roca oscura con cráteres y grietas de lava que brillan
     Meteor,
+    /// Regolito gris con mares oscuros y cráteres con borde claro. Espera un modelo esférico de radio 1.
+    Moon,
 }
 
 impl Material {
+    /// Mapa de normales que usa este material, si tiene. El rasterizador solo calcula tangentes
+    /// y nivel de mipmap para estos.
+    pub fn normal_map(&self) -> Option<Kind> {
+        match self {
+            Material::Rocky { .. } => Some(Kind::Rock),
+            Material::Ice { .. } => Some(Kind::Ice),
+            _ => None,
+        }
+    }
+
     /// Color representativo (para el minimapa).
     pub fn tint(&self) -> u32 {
         match *self {
@@ -58,6 +78,7 @@ impl Material {
             Material::Rocky { land, .. } => land,
             Material::Gas { a, .. } | Material::Ice { a, .. } | Material::Ring { a, .. } => a,
             Material::Meteor => 0xD02A05,
+            Material::Moon => 0xB9B5AE,
             Material::BlackHole => 0xAB47BC,
             Material::Ufo => 0x7DFFB2,
         }
@@ -78,12 +99,12 @@ pub fn blend(a: u32, b: u32, t: f32) -> u32 {
     pack(rgb(a).lerp(rgb(b), t))
 }
 
-fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
+pub(crate) fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
     let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
 
-fn hash(x: i32, y: i32, z: i32) -> f32 {
+pub(crate) fn hash(x: i32, y: i32, z: i32) -> f32 {
     let mut h = (x as u32).wrapping_mul(374_761_393)
         ^ (y as u32).wrapping_mul(668_265_263)
         ^ (z as u32).wrapping_mul(2_147_483_647);
@@ -169,6 +190,18 @@ pub fn discards(m: &Material, f: &Fragment) -> bool {
     matches!(m, Material::Ring { .. }) && ring_profile(f.local).1 < 0.18
 }
 
+/// Normal del fragmento con el mapa de normales aplicado. `p` es la dirección unitaria local,
+/// `seed` desplaza la textura para que dos planetas del mismo tipo no se vean iguales y `weight`
+/// (0 a 1) atenúa el relieve (por ejemplo, el mar es liso).
+fn mapped_normal(kind: Kind, seed: f32, f: &Fragment, s: &Scene, n: Vec3, p: Vec3, weight: f32) -> Vec3 {
+    if !s.normal_maps || weight <= 0.0 {
+        return n;
+    }
+    let (u, v) = normalmap::sphere_uv(p);
+    let ts = normalmap::map(kind).sample((u + seed * 0.1371).fract(), v, f.lod);
+    normalmap::perturb(n, f.tangent, Vec3::new(0.0, 0.0, 1.0).lerp(ts, weight))
+}
+
 pub fn shade(m: &Material, f: &Fragment, s: &Scene) -> u32 {
     let n = f.normal.normalize();
     let lambert = n.dot((s.light_pos - f.world).normalize()).max(0.0);
@@ -209,7 +242,10 @@ pub fn shade(m: &Material, f: &Fragment, s: &Scene) -> u32 {
             };
             let polar = smoothstep(0.78, 0.9, p.y.abs() + (h - 0.5) * 0.15);
             let c = ground.lerp(Vec3::new(0.95, 0.97, 1.0), polar);
-            pack(c * (0.10 + 0.90 * lambert) + Vec3::new(0.3, 0.5, 1.0) * (rim(n, view, lambert) * 0.6))
+            // El relieve fino del mapa de normales solo en tierra: el mar queda liso.
+            let nm = mapped_normal(Kind::Rock, seed, f, s, n, p, smoothstep(SEA_LEVEL, SEA_LEVEL + 0.02, h));
+            let lit = nm.dot((s.light_pos - f.world).normalize()).max(0.0);
+            pack(c * (0.10 + 0.90 * lit) + Vec3::new(0.3, 0.5, 1.0) * (rim(n, view, lambert) * 0.6))
         }
         Material::Gas { a, b, seed } => {
             let warp = fbm(Vec3::new(p.x * 2.0 + seed, p.y * 5.0, p.z * 2.0 + seed), 3);
@@ -221,7 +257,9 @@ pub fn shade(m: &Material, f: &Fragment, s: &Scene) -> u32 {
             let h = ice_height(p, seed);
             let crack = 1.0 - smoothstep(0.0, 0.03, (h - 0.5).abs());
             let c = rgb(a).lerp(rgb(b), h) * (1.0 - 0.5 * crack);
-            pack(c * (0.12 + 0.88 * lambert) + Vec3::new(0.6, 0.8, 1.0) * (rim(n, view, lambert) * 0.5))
+            let nm = mapped_normal(Kind::Ice, seed, f, s, n, p, 1.0);
+            let lit = nm.dot((s.light_pos - f.world).normalize()).max(0.0);
+            pack(c * (0.12 + 0.88 * lit) + Vec3::new(0.6, 0.8, 1.0) * (rim(n, view, lambert) * 0.5))
         }
         Material::Ring { a, b } => {
             let (fine, density) = ring_profile(f.local);
@@ -263,6 +301,18 @@ pub fn shade(m: &Material, f: &Fragment, s: &Scene) -> u32 {
             let cristal = rgb(0x0f6b48).lerp(rgb(0x7dffb2), fres) * (0.6 + 0.4 * sheen);
             pack(c.lerp(cristal, cupula))
         }
+        Material::Moon => {
+            let q = f.local;
+            let dust = fbm(q * 6.0, 4);
+            let mut c = rgb(0x8D8A86).lerp(rgb(0xB9B5AE), dust);
+            let maria = smoothstep(0.50, 0.58, fbm(q * 1.8 + Vec3::new(3.1, 0.7, 5.2), 4));
+            c = c.lerp(rgb(0x4E4C4B), maria * 0.8);
+            // Cráteres: fondo oscuro rodeado de un borde claro.
+            let cr = fbm(q * 7.0 + Vec3::new(1.7, 8.3, 2.9), 2);
+            c = c.lerp(rgb(0x3B3A39), smoothstep(0.30, 0.22, cr) * 0.7);
+            c = c.lerp(rgb(0xD8D4CB), smoothstep(0.30, 0.34, cr) * smoothstep(0.40, 0.34, cr) * 0.5);
+            pack(c * (0.05 + 0.95 * lambert))
+        }
         Material::Meteor => {
             let q = f.local;
             let t = s.time;
@@ -288,11 +338,11 @@ mod tests {
     use super::*;
 
     fn escena(t: f32) -> Scene {
-        Scene { time: t, light_pos: Vec3::new(0.0, 0.0, 100.0), eye: Vec3::new(0.0, 0.0, 10.0) }
+        Scene { time: t, light_pos: Vec3::new(0.0, 0.0, 100.0), eye: Vec3::new(0.0, 0.0, 10.0), normal_maps: true }
     }
 
     fn frag(local: Vec3) -> Fragment {
-        Fragment { world: local, normal: local.normalize(), local }
+        Fragment { world: local, normal: local.normalize(), local, ..Default::default() }
     }
 
     #[test]
@@ -339,25 +389,68 @@ mod tests {
     #[test]
     fn el_lado_oscuro_es_mas_oscuro_que_el_iluminado() {
         let m = Material::Flat { color: 0xFFFFFF };
-        let luz = shade(&m, &Fragment { world: Vec3::ZERO, normal: Vec3::new(0.0, 0.0, 1.0), local: Vec3::ZERO }, &escena(0.0));
-        let sombra = shade(&m, &Fragment { world: Vec3::ZERO, normal: Vec3::new(0.0, 0.0, -1.0), local: Vec3::ZERO }, &escena(0.0));
+        let luz = shade(&m, &Fragment { world: Vec3::ZERO, normal: Vec3::new(0.0, 0.0, 1.0), local: Vec3::ZERO, ..Default::default() }, &escena(0.0));
+        let sombra = shade(&m, &Fragment { world: Vec3::ZERO, normal: Vec3::new(0.0, 0.0, -1.0), local: Vec3::ZERO, ..Default::default() }, &escena(0.0));
         assert!((luz & 0xFF) > (sombra & 0xFF));
     }
 
     #[test]
     fn el_metal_brilla_mas_de_cara_a_la_luz_que_de_espaldas() {
         let m = Material::Metal { color: 0x8899AA, tint: None };
-        let escena = Scene { time: 0.0, light_pos: Vec3::new(0.0, 0.0, 10.0), eye: Vec3::new(0.0, 0.0, 10.0) };
-        let luz = shade(&m, &Fragment { world: Vec3::ZERO, normal: Vec3::new(0.0, 0.0, 1.0), local: Vec3::ZERO }, &escena);
-        let sombra = shade(&m, &Fragment { world: Vec3::ZERO, normal: Vec3::new(0.0, 0.0, -1.0), local: Vec3::ZERO }, &escena);
+        let escena = Scene { time: 0.0, light_pos: Vec3::new(0.0, 0.0, 10.0), eye: Vec3::new(0.0, 0.0, 10.0), normal_maps: true };
+        let luz = shade(&m, &Fragment { world: Vec3::ZERO, normal: Vec3::new(0.0, 0.0, 1.0), local: Vec3::ZERO, ..Default::default() }, &escena);
+        let sombra = shade(&m, &Fragment { world: Vec3::ZERO, normal: Vec3::new(0.0, 0.0, -1.0), local: Vec3::ZERO, ..Default::default() }, &escena);
         assert!(luz > sombra);
     }
 
     #[test]
     fn el_emisivo_ignora_la_luz() {
         let m = Material::Emissive { color: 0x123456 };
-        let a = shade(&m, &Fragment { world: Vec3::ZERO, normal: Vec3::new(0.0, 0.0, 1.0), local: Vec3::ZERO }, &escena(0.0));
-        let b = shade(&m, &Fragment { world: Vec3::ZERO, normal: Vec3::new(0.0, 0.0, -1.0), local: Vec3::ZERO }, &escena(0.0));
+        let a = shade(&m, &Fragment { world: Vec3::ZERO, normal: Vec3::new(0.0, 0.0, 1.0), local: Vec3::ZERO, ..Default::default() }, &escena(0.0));
+        let b = shade(&m, &Fragment { world: Vec3::ZERO, normal: Vec3::new(0.0, 0.0, -1.0), local: Vec3::ZERO, ..Default::default() }, &escena(0.0));
         assert_eq!((a, b), (0x123456, 0x123456));
     }
+
+    /// Un fragmento en la dirección `dir` de un planeta, con luz de frente y tangente al este.
+    fn frag_mapeado(dir: Vec3) -> Fragment {
+        let p = dir.normalize();
+        Fragment { world: p * 10.0, normal: p, local: p, tangent: normalmap::sphere_tangent(p), lod: 0.0 }
+    }
+
+    fn escena_de_frente(maps: bool) -> Scene {
+        Scene { time: 0.0, light_pos: Vec3::new(0.0, 0.0, 1000.0), eye: Vec3::new(0.0, 0.0, 100.0), normal_maps: maps }
+    }
+
+    #[test]
+    fn el_mapa_de_normales_cambia_el_sombreado_de_la_tierra_pero_no_del_mar() {
+        let m = Material::Rocky { sea: 0x1E5FB8, land: 0x3E8E41, peak: 0x8D7B68, seed: 4.0 };
+        let (mut tierra, mut mar) = (0, 0);
+        for i in 0..400 {
+            let d = Vec3::new((i as f32 * 0.37).sin(), (i as f32 * 0.11).cos(), 0.8 + (i as f32 * 0.7).sin() * 0.2);
+            let f = frag_mapeado(d);
+            let (con, sin) = (shade(&m, &f, &escena_de_frente(true)), shade(&m, &f, &escena_de_frente(false)));
+            if rocky_height(f.local.normalize(), 4.0) < SEA_LEVEL {
+                mar += 1;
+                assert_eq!(con, sin, "el mar es liso");
+            } else if con != sin {
+                tierra += 1;
+            }
+        }
+        assert!(mar > 10 && tierra > 50, "mar {mar}, tierra con relieve {tierra}");
+    }
+
+    #[test]
+    fn el_hielo_usa_el_mapa_y_sin_tangente_no_hay_efecto() {
+        let m = Material::Ice { a: 0xBFE3F5, b: 0x6FA8D6, seed: 7.0 };
+        let diferentes = (0..100)
+            .filter(|&i| {
+                let f = frag_mapeado(Vec3::new((i as f32 * 0.5).sin(), (i as f32 * 0.2).cos(), 0.9));
+                shade(&m, &f, &escena_de_frente(true)) != shade(&m, &f, &escena_de_frente(false))
+            })
+            .count();
+        assert!(diferentes > 50, "{diferentes}");
+        let f = Fragment { tangent: Vec3::ZERO, ..frag_mapeado(Vec3::new(0.2, 0.3, 0.9)) };
+        assert_eq!(shade(&m, &f, &escena_de_frente(true)), shade(&m, &f, &escena_de_frente(false)));
+    }
+
 }

@@ -12,6 +12,7 @@ const FACTOR_EXPLOSION: f32 = 0.5;
 const VOLUMEN_PUNTO: f32 = 0.8;
 const VOLUMEN_AGUJERO: f32 = 0.9;
 const VOLUMEN_OVNI: f32 = 0.9;
+const VOLUMEN_LASER: f32 = 0.35;
 
 pub struct Sonidos {
     _stream: OutputStream,
@@ -21,6 +22,7 @@ pub struct Sonidos {
     agujero: Option<Vec<u8>>,
     ovni: Option<Vec<u8>>,
     motor: Option<Vec<u8>>,
+    laser: Option<Vec<u8>>,
     sink_motor: Option<Sink>,
     /// Sonido en bucle mientras este cerca
     sink_agujero: Option<Sink>,
@@ -58,6 +60,7 @@ impl Sonidos {
             agujero: leer("blackhole.ogg"),
             ovni: leer("ovni.ogg"),
             motor: leer("motor.ogg"),
+            laser: leer("laser.ogg"),
             sink_motor: None,
             sink_agujero: None,
             sink_ovni: None,
@@ -70,13 +73,19 @@ impl Sonidos {
     }
 
     /// `avanzando`: W presionada en la pantalla de juego.
-    pub fn actualizar(&mut self, dt: f32, avanzando: bool, choques: &[CollisionEvent], aros: u32, cercania_agujero: f32, cercania_ovni: f32) {
+    pub fn actualizar(&mut self, dt: f32, avanzando: bool, choques: &[CollisionEvent], aros: u32, disparos: u32, cercania_agujero: f32, cercania_ovni: f32) {
         self.reloj += dt;
         self.activos.retain(|s| !s.empty());
 
         // Sonido de cercania del agujero negro y ovni
         Self::rumor(&self.handle, &mut self.sink_agujero, &self.agujero, cercania_agujero, VOLUMEN_AGUJERO);
         Self::rumor(&self.handle, &mut self.sink_ovni, &self.ovni, cercania_ovni, VOLUMEN_OVNI);
+
+        if disparos > 0 {
+            if let Some(sink) = self.laser.clone().and_then(|b| self.tocar(b, VOLUMEN_LASER)) {
+                self.activos.push(sink);
+            }
+        }
 
         if aros > 0 {
             if let Some(sink) = self.punto.clone().and_then(|b| self.tocar(b, VOLUMEN_PUNTO)) {

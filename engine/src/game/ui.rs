@@ -57,16 +57,27 @@ impl Game {
                 if en_pantalla && !tapado(fb, &v.vp, v.eye, arriba, 0.0, x, y) {
                     let nombre = nombre_mostrado(&r.shown.name, format!("J{}", r.shown.id));
                     hud::centered(fb, x as i32, y as i32 - 8 * s as i32, s, color_jugador(r.shown.id), &nombre);
+                    // Su vida, en una barrita encima del nombre.
+                    let (bw, bh) = (24 * s as i32, 3 * s as i32);
+                    barra_vida(fb, x as i32 - bw / 2, y as i32 - 8 * s as i32 - bh - 3 * s as i32, bw, bh, r.shown.health as f32 / 100.0);
                 }
             }
         }
 
+        // Vida: barra arriba a la izquierda, con el porcentaje.
+        let si = s as i32;
+        let (bx, bw, bh) = (m + hud::width("VIDA ", s), 70 * si, 7 * si);
+        hud::label(fb, m, m, s, white, "VIDA");
+        barra_vida(fb, bx, m, bw, bh, self.vida / VIDA_MAX);
+        hud::label(fb, bx + bw + 4 * si, m, s, white, &format!("{:.0}%", self.vida));
+
         // Datos de vuelo y de render
-        hud::label(fb, m, m, s, white, &format!("VEL {:.0} U/S", self.ship.speed()));
-        hud::label(fb, m, m + line, s, 0x90A4AE, &format!("TRIANGULOS {}", st.triangles));
-        hud::label(fb, m, m + 2 * line, s, 0x90A4AE, &format!("OBJETOS {}/{}", st.visible, st.total));
+        let m0 = m + line + 2 * si;
+        hud::label(fb, m, m0, s, white, &format!("VEL {:.0} U/S", self.ship.speed()));
+        hud::label(fb, m, m0 + line, s, 0x90A4AE, &format!("TRIANGULOS {}", st.triangles));
+        hud::label(fb, m, m0 + 2 * line, s, 0x90A4AE, &format!("OBJETOS {}/{}", st.visible, st.total));
         let red = if self.online { format!("ONLINE {} JUGADORES", 1 + self.en_linea().count()) } else { "SIN CONEXION".to_string() };
-        hud::label(fb, m, m + 3 * line, s, if self.online { 0x66BB6A } else { 0xEF9A9A }, &red);
+        hud::label(fb, m, m0 + 3 * line, s, if self.online { 0x66BB6A } else { 0xEF9A9A }, &red);
         let vista = match self.view {
             ViewMode::ThirdPerson => "3A PERSONA",
             ViewMode::FirstPerson => "1A PERSONA",
@@ -85,11 +96,11 @@ impl Game {
             }
         }
         for (i, (texto, color)) in filas.iter().enumerate() {
-            hud::label(fb, m, m + (4 + i as i32) * line, s, *color, texto);
+            hud::label(fb, m, m0 + (4 + i as i32) * line, s, *color, texto);
         }
 
-        if self.modo == Modo::Persecucion {
-            self.draw_persecucion(fb, v, s, m, line);
+        if self.modo == Modo::Ataque {
+            self.draw_ataque(fb, v, s, m, line);
             self.draw_minimap(fb, s as i32, m);
             self.draw_derrota(fb, s);
             return;
@@ -149,35 +160,49 @@ impl Game {
         self.draw_derrota(fb, s);
     }
 
-    /// HUD del modo persecución: tiempo sobrevivido, mejor tiempo, ovnis y una flecha hacia cada uno.
-    pub(super) fn draw_persecucion(&self, fb: &mut Framebuffer, v: &View, s: usize, m: i32, line: i32) {
+    /// HUD del modo ataque: tiempo, ovnis que quedan, su vida y una flecha hacia cada uno.
+    pub(super) fn draw_ataque(&self, fb: &mut Framebuffer, v: &View, s: usize, m: i32, line: i32) {
         let (w, h) = (fb.width as i32, fb.height as i32);
         let cx = w / 2;
-        let p = &self.persecucion;
+        let p = &self.ataque;
         hud::centered(fb, cx, m, s * 2, 0xFFFFFF, &fmt_time(p.tiempo));
-        let mejor = self.mejor_persecucion.map_or("MEJOR --".to_string(), |t| format!("MEJOR {}", fmt_time(t)));
-        hud::centered(fb, cx, m + 2 * line + 4 * s as i32, s, 0x90A4AE, &mejor);
-        let siguiente = match p.proximo_en() {
-            Some(t) if !p.en_gracia() => format!("   OTRO EN {:.0}", t.ceil()),
-            _ => String::new(),
-        };
-        hud::centered(fb, cx, m + 3 * line + 4 * s as i32, s, 0xEF9A9A, &format!("OVNIS {}{}", p.ovnis.len(), siguiente));
+        let quedan = format!("OVNIS {}/{}   PUNTOS {}", p.ovnis.len(), chase::OVNIS_ATAQUE, p.resultado().puntos);
+        hud::centered(fb, cx, m + 2 * line + 4 * s as i32, s, 0xEF9A9A, &quedan);
+        hud::centered(fb, cx, m + 3 * line + 4 * s as i32, s, 0x90A4AE, &format!("MEJOR {}", fmt_resultado(self.mejor_ataque)));
+
+        if p.ganado {
+            let si = s as i32;
+            hud::shade_rect(fb, 0, 0, w, h, 0x000000, 130);
+            hud::centered(fb, cx, h / 3, s * 4, 0x66BB6A, "GANASTE");
+            hud::centered(fb, cx, h / 3 + 40 * si, s, 0xFFFFFF, &format!("DESTRUISTE LOS {} OVNIS EN {}", chase::OVNIS_ATAQUE, fmt_time(p.tiempo)));
+            let puntos = format!("{} PUNTOS ({} POR OVNIS + {} DE BONUS)", p.resultado().puntos, p.destruidos * chase::PUNTOS_POR_OVNI, p.bonus());
+            hud::centered(fb, cx, h / 3 + 55 * si, s, COLOR_SIGUIENTE, &puntos);
+            hud::centered(fb, cx, h / 3 + 75 * si, s, 0x90A4AE, "ENTER JUGAR DE NUEVO   M MENU");
+            return;
+        }
 
         if self.derrota.is_none() {
             let dist = p.distancia_minima(self.ship.position).unwrap_or(f32::MAX);
             if p.en_gracia() {
                 let n = p.segundos_de_gracia().ceil().max(1.0);
-                // Arriba, para no tapar al ovni, que ahora aparece de frente.
-                hud::centered(fb, cx, m + 5 * line + 8 * s as i32, s * 3, 0xEF5350, "HUYE!");
-                hud::centered(fb, cx, m + 5 * line + 8 * s as i32 + 30 * s as i32, s, 0xFFFFFF, &format!("EL OVNI SALE EN {n:.0}"));
+                hud::centered(fb, cx, m + 5 * line + 8 * s as i32, s * 3, 0xEF5350, "ATACA!");
+                hud::centered(fb, cx, m + 5 * line + 8 * s as i32 + 30 * s as i32, s, 0xFFFFFF, &format!("LOS OVNIS SALEN EN {n:.0}   F DISPARA"));
             } else if dist < chase::CAZADOR_PELIGRO && (self.time * 4.0) as i32 % 2 == 0 {
                 hud::centered(fb, cx, m + 5 * line + 8 * s as i32, s * 2, 0xEF5350, "PELIGRO");
             }
             for o in &p.ovnis {
                 marcador(fb, v, s, m, o.position, o.position.distance(self.ship.position), 0xEF5350);
+                // Vida del ovni en una barrita encima.
+                let arriba = o.position + Vec3::new(0.0, chase::CAZADOR_RADIO + 2.0, 0.0);
+                if let Some((x, y, _)) = raster::project(&v.vp, arriba, fb.width, fb.height) {
+                    if x > 0.0 && x < w as f32 && y > 0.0 && y < h as f32 && !tapado(fb, &v.vp, v.eye, arriba, 0.0, x, y) {
+                        let (bw, bh) = (24 * s as i32, 3 * s as i32);
+                        barra_vida(fb, x as i32 - bw / 2, y as i32 - bh, bw, bh, o.vida as f32 / chase::OVNI_VIDA as f32);
+                    }
+                }
             }
         }
-        hud::label(fb, m, h - m - line, s, 0x78909C, "ENTER REINICIAR   M MENU");
+        hud::label(fb, m, h - m - line, s, 0x78909C, "F DISPARAR   ENTER REINICIAR   M MENU");
     }
 
     /// Vista de "perdiste" con la causa y qué pasa después.
@@ -188,17 +213,23 @@ impl Game {
         hud::shade_rect(fb, 0, 0, fb.width as i32, h, 0x000000, 130);
         hud::centered(fb, cx, h / 3, s * 4, 0xEF5350, "PERDISTE");
         hud::centered(fb, cx, h / 3 + 40 * si, s, 0xFFFFFF, d.causa.mensaje());
-        let pie = if self.modo == Modo::Persecucion {
-            let mejor = self.mejor_persecucion.map_or(String::new(), |t| format!("   MEJOR {}", fmt_time(t)));
-            format!("SOBREVIVISTE {}{}", fmt_time(self.persecucion.tiempo), mejor)
-        } else if d.elimina {
-            let t = self.muerte_time.unwrap_or(self.race.time);
-            format!("PASASTE {}/{} AROS EN {}   VUELVES A LA SALA", self.progress, GATE_COUNT, fmt_time(t))
+        if self.modo == Modo::Ataque {
+            let pie = format!("DESTRUISTE {}/{} OVNIS EN {}", self.ataque.destruidos, chase::OVNIS_ATAQUE, fmt_time(self.ataque.tiempo));
+            hud::centered(fb, cx, h / 3 + 60 * si, s, 0x90A4AE, &pie);
+            // Los puntos solo si alcanzó a destruir algún ovni.
+            if self.ataque.destruidos > 0 {
+                hud::centered(fb, cx, h / 3 + 75 * si, s * 2, COLOR_SIGUIENTE, &format!("{} PUNTOS", self.ataque.resultado().puntos));
+            }
+            hud::centered(fb, cx, h / 3 + 100 * si, s, COLOR_SIGUIENTE, "ENTER VOLVER A JUGAR   M MENU");
         } else {
-            "VOLVIENDO AL MAPA...".to_string()
-        };
-        let pie = if self.modo == Modo::Persecucion { format!("{pie}   REINICIANDO...") } else { pie };
-        hud::centered(fb, cx, h / 3 + 60 * si, s, 0x90A4AE, &pie);
+            let mut y = h / 3 + 60 * si;
+            if d.elimina {
+                let t = self.muerte_time.unwrap_or(self.race.time);
+                hud::centered(fb, cx, y, s, 0x90A4AE, &format!("PASASTE {}/{} AROS EN {}", self.progress, GATE_COUNT, fmt_time(t)));
+                y += 15 * si;
+            }
+            hud::centered(fb, cx, y, s, 0x90A4AE, "REGRESANDO A SALA DE ESPERA...");
+        }
     }
 
     /// Pantalla de inicio: título, vista previa de la nave, controles y estado de la sala.
@@ -226,14 +257,14 @@ impl Game {
             ("FLECHAS", "INCLINAR LA NARIZ"),
             ("ESPACIO", "FRENAR"),
             ("ENTER", "EMPEZAR CARRERA"),
-            ("P", "PERSECUCION (SOLO)"),
+            ("P", "ATAQUE (SOLO)"),
             ("TAB", "CAMBIAR DE NAVE"),
             ("M", "VOLVER AL MENU"),
             ("G", "GRAVEDAD SI O NO"),
             ("O", "ORBITAR PLANETA"),
             ("V", "PRIMERA PERSONA"),
             ("R", "NUEVA SEMILLA"),
-            ("F", "PANTALLA COMPLETA"),
+            ("F", "DISPARAR"),
         ];
         let col = 9;
         let cols = controles.iter().map(|(_, a)| col + a.len()).max().unwrap_or(col);
@@ -281,7 +312,7 @@ impl Game {
         let color = if (self.time * 2.0) as i32 % 2 == 0 { oro } else { 0xFFF59D };
         let invitacion = if self.esperando() { "ENTER = SALA DE ESPERA" } else { "ENTER = CARRERA" };
         hud::centered(fb, cx, h - m - 40 * si, s * 2, color, invitacion);
-        hud::centered(fb, cx, h - m - 20 * si, s * 2, 0xEF9A9A, "P = PERSECUCION");
+        hud::centered(fb, cx, h - m - 20 * si, s * 2, 0xEF9A9A, "P = ATAQUE");
     }
 
     /// Mapa visto desde arriba: sol, órbitas, planetas, circuito y jugadores.
@@ -308,7 +339,7 @@ impl Game {
             hud::dot(fb, x, y, ((pl.radius / ALCANCE * size as f32) as i32).max(s), pl.material.tint());
         }
         let racing = self.race.phase == Phase::Racing && !self.esperando();
-        let aros = if self.modo == Modo::Persecucion { 0 } else { self.course.len() };
+        let aros = if self.modo == Modo::Ataque { 0 } else { self.course.len() };
         for (i, g) in self.course.iter().enumerate().take(aros) {
             let (x, y) = to_map(g.pos);
             let (color, r) = if racing && i == self.progress { (COLOR_SIGUIENTE, s) } else if i < self.progress && racing { (0x2E7D32, 1) } else { (COLOR_PUNTO, 1) };
@@ -320,8 +351,8 @@ impl Game {
                 hud::dot(fb, x, y, s + 1, COLORES_JUGADORES[r.shown.id as usize % COLORES_JUGADORES.len()]);
             }
         }
-        if self.modo == Modo::Persecucion {
-            for o in &self.persecucion.ovnis {
+        if self.modo == Modo::Ataque {
+            for o in &self.ataque.ovnis {
                 let (x, y) = to_map(o.position);
                 if en_mapa(x, y) {
                     hud::dot(fb, x, y, s + 2, 0xEF5350);
@@ -392,6 +423,27 @@ pub(super) fn banner(fb: &mut Framebuffer, s: usize, titulo: &str, pista: &str) 
 pub(super) fn fmt_time(secs: f32) -> String {
     let cs = (secs * 100.0) as u32;
     format!("{}:{:02}.{:02}", cs / 6000, cs / 100 % 60, cs % 100)
+}
+
+fn fmt_resultado(r: Option<chase::Resultado>) -> String {
+    r.map_or("--".to_string(), |r| format!("{} PTS {}", r.puntos, fmt_time(r.tiempo)))
+}
+
+/// Barra de vida con cambio de color segun el %
+fn barra_vida(fb: &mut Framebuffer, x: i32, y: i32, w: i32, h: i32, frac: f32) {
+    let frac = frac.clamp(0.0, 1.0);
+    let color = if frac > 0.6 {
+        0x66BB6A
+    } else if frac > 0.3 {
+        0xFFCA28
+    } else {
+        0xEF5350
+    };
+    hud::shade_rect(fb, x, y, w, h, 0x000000, 170);
+    hud::rect(fb, x, y, (w as f32 * frac).round() as i32, h, color);
+    for (rx, ry, rw, rh) in [(x - 1, y - 1, w + 2, 1), (x - 1, y + h, w + 2, 1), (x - 1, y, 1, h), (x + w, y, 1, h)] {
+        hud::rect(fb, rx, ry, rw, rh, 0xCFD8DC);
+    }
 }
 
 #[cfg(test)]

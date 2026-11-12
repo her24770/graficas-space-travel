@@ -4,7 +4,7 @@ use crate::{
     frustum::Frustum,
     hud,
     input::Input,
-    obj,
+    normalmap, obj,
     orbit::{self, Orbit},
     physics::{self, Body},
     procedural,
@@ -15,6 +15,7 @@ use crate::{
     rng::Rng,
     scenario::{self, Gate, BLACK_HOLES, GATE_COUNT, PLANETS, PROPS_SEED, SUN_GRAVITY, SUN_RADIUS, UFOS},
     shaders::{Material, Scene},
+    shots::{self, Shots},
     sparks::Sparks,
     terrain, Framebuffer, Mat4, Mesh, Ship, Vec3,
 };
@@ -25,7 +26,7 @@ mod collisions;
 mod render;
 mod ui;
 
-use chase::Persecucion;
+use chase::{Ataque, Resultado};
 pub use chase::Modo;
 
 const FOV_Y: f32 = 60.0 * PI / 180.0;
@@ -48,8 +49,19 @@ const AGUJERO_ALCANCE: f32 = 160.0;
 const OVNI_ALCANCE: f32 = 100.0;
 /// Segundos que se muestra un aviso en pantalla.
 const AVISO_S: f32 = 2.0;
-/// Cuánto dura el cartel de "perdiste" antes de reaparecer
-const DERROTA_S: f32 = 4.0;
+/// Vida de la nave al salir (porcentaje).
+const VIDA_MAX: f32 = 100.0;
+/// Daño de un choque contra un planeta, el sol, una luna u objeto: crece con la velocidad de
+/// impacto, entre un mínimo y un máximo (en puntos de vida).
+const DANO_POR_VELOCIDAD: f32 = 0.5;
+const DANO_MIN: f32 = 3.0;
+const DANO_MAX: f32 = 30.0;
+/// Tras un golpe, segundos sin recibir otro: un mismo choque no descuenta vida varias veces.
+const INVULNERABLE_S: f32 = 0.6;
+/// En el modo carrera, cuánto dura el cartel de "perdiste" antes de regresar a la sala.
+const DERROTA_S: f32 = 5.0;
+/// Distancia delante del centro de la nave de la que sale el disparo (la punta del modelo).
+const DISPARO_SALIDA: f32 = 2.5;
 /// Se puede entrar en órbita a menos de esta altura sobre la superficie (en radios del cuerpo).
 const CAPTURA_RADIOS: f32 = 5.0;
 /// Los objetos de superficie se dibujan a menos de esta distancia (en radios del planeta).
@@ -101,6 +113,8 @@ pub struct CollisionEvent {
 enum Causa {
     AgujeroNegro,
     Ovni,
+    /// La vida llegó a 0 de tanto chocar.
+    Destruida,
 }
 
 impl Causa {
@@ -108,11 +122,13 @@ impl Causa {
         match self {
             Causa::AgujeroNegro => "CAISTE EN UN AGUJERO NEGRO, YA NO PUEDES ESCAPAR",
             Causa::Ovni => "LOS ALIENS TE RAPTARON, YA NO PUEDES ESCAPAR",
+            Causa::Destruida => "TU NAVE QUEDO DESTRUIDA DE TANTO CHOCAR",
         }
     }
 }
 
-/// La nave perdió: se muestra el cartel y la nave queda quieta hasta que termine.
+/// La nave perdió: se muestra el cartel y la nave queda quieta. En la carrera se cierra solo; en el modo
+/// ataque espera a elegir volver a jugar (Enter) o el menú (M).
 #[derive(Clone, Copy, Debug)]
 struct Derrota {
     causa: Causa,
@@ -181,16 +197,20 @@ pub struct Game {
     derrota: Option<Derrota>,
     /// Perdió en plena carrera: se queda quieta hasta la siguiente carrera o el menú.
     eliminado: bool,
-    /// Entró a la carrera actual por su cuenta regresiva. Quien llega después, o está en persecución
+    /// Entró a la carrera actual por su cuenta regresiva. Quien llega después, o está en el modo ataque
     /// cuando se larga, no corre: espera en la sala a que termine.
     en_carrera: bool,
-    /// modo carrera o persecucion
+    /// modo carrera o ataque
     modo: Modo,
-    persecucion: Persecucion,
-    /// Mejor tiempo sobrevivido en persecución.
-    mejor_persecucion: Option<f32>,
+    ataque: Ataque,
+    /// Mejor partida del modo ataque: más puntos y, con empate, menos tiempo.
+    mejor_ataque: Option<Resultado>,
     /// Segundos de carrera en que quedó eliminado.
     muerte_time: Option<f32>,
+    /// Vida de la nave (0 a `VIDA_MAX`): baja al chocar y en 0 la nave pierde.
+    vida: f32,
+    /// Hasta cuándo (segundos de `time`) un choque no quita vida.
+    invulnerable_hasta: f32,
     slot: usize,
     my_id: Option<u32>,
     /// Mi nombre (ASCII, ceros al final); todo ceros = sin nombre.
@@ -207,6 +227,7 @@ pub struct Game {
     placements: Vec<Vec<PropInstance>>,
     /// Malla del meteorito de cada planeta (radio 1) y de sus anillos (radio exterior 1).
     meteor_meshes: Vec<Option<Mesh>>,
+    moon_meshes: Vec<Option<Mesh>>,
     ring_meshes: Vec<Option<Mesh>>,
     /// Malla de cada agujero negro
     hole_meshes: Vec<Mesh>,
@@ -218,6 +239,8 @@ pub struct Game {
     orbit: Option<Orbit>,
     collisions: Vec<CollisionEvent>,
     sparks: Sparks,
+    shots: Shots,
+    disparos_hechos: u32,
     /// Aros cruzados
     gates_passed: u32,
     /// Aviso en pantalla: texto, color y hasta cuándo (segundos de `time`).
@@ -312,6 +335,16 @@ impl Game {
             .iter()
             .map(|p| p.meteors.as_ref().map(|m| modelo_aparte(m.model).unwrap_or_else(|| procedural::icosphere(1))))
             .collect();
+        let moon_meshes = PLANETS
+            .iter()
+            .map(|p| {
+                p.moon.as_ref().map(|m| {
+                    let mut mesh = modelo_aparte(m.model).unwrap_or_else(|| procedural::icosphere(2));
+                    mesh.recompute_normals();
+                    mesh
+                })
+            })
+            .collect();
         let ring_meshes = PLANETS.iter().map(|p| p.rings.as_ref().and_then(|r| modelo_aparte(r.model))).collect();
         let ufo_meshes = UFOS
             .iter()
@@ -323,6 +356,7 @@ impl Game {
             .collect();
         let hole_meshes = BLACK_HOLES.iter().map(|h| modelo_aparte(h.model).unwrap_or_else(|| procedural::torus(1.0, 0.2, 28, 8))).collect();
 
+        normalmap::warm_up();
         let mut game = Self {
             time: 0.0,
             world_time: 0.0,
@@ -344,9 +378,11 @@ impl Game {
             eliminado: false,
             en_carrera: false,
             modo: Modo::Carrera,
-            persecucion: Persecucion::new(),
-            mejor_persecucion: None,
+            ataque: Ataque::new(),
+            mejor_ataque: None,
             muerte_time: None,
+            vida: VIDA_MAX,
+            invulnerable_hasta: 0.0,
             slot: 0,
             my_id: None,
             name: [0; NAME_LEN],
@@ -358,6 +394,7 @@ impl Game {
             prop_mesh_of,
             placements: Vec::new(),
             meteor_meshes,
+            moon_meshes,
             ring_meshes,
             hole_meshes,
             ufo_meshes,
@@ -367,6 +404,8 @@ impl Game {
             orbit: None,
             collisions: Vec::new(),
             sparks: Sparks::new(),
+            shots: Shots::new(),
+            disparos_hechos: 0,
             gates_passed: 0,
             notice: None,
         };
@@ -381,6 +420,9 @@ impl Game {
         self.ship.reset(pos, yaw, pitch);
         self.camera = ChaseCamera::new(&self.ship);
         self.orbit = None;
+        self.vida = VIDA_MAX;
+        self.invulnerable_hasta = 0.0;
+        self.shots.clear();
     }
 
     fn place_props(seed: u64) -> Vec<Vec<PropInstance>> {
@@ -405,6 +447,11 @@ impl Game {
         self.gravity_on
     }
 
+    /// Vida de la nave en porcentaje (0 a 100).
+    pub fn health(&self) -> f32 {
+        self.vida
+    }
+
     /// Cuerpo que se está orbitando (0 = sol, 1.. = planetas), si hay.
     pub fn orbiting(&self) -> Option<usize> {
         self.orbit.map(|o| o.body)
@@ -417,6 +464,11 @@ impl Game {
 
     pub fn take_gates_passed(&mut self) -> u32 {
         std::mem::take(&mut self.gates_passed)
+    }
+
+    /// Disparos hechos desde la última llamada (para el sonido del láser).
+    pub fn take_shots_fired(&mut self) -> u32 {
+        std::mem::take(&mut self.disparos_hechos)
     }
 
     fn notice(&mut self, text: String, color: u32) {
@@ -491,17 +543,17 @@ impl Game {
                 self.modo = Modo::Carrera;
             } else if input.chase {
                 self.screen = Screen::Playing;
-                self.iniciar_persecucion();
+                self.iniciar_ataque();
             }
         } else {
             if input.cycle_model {
                 self.next_model(1);
             }
-            if input.menu && (self.modo == Modo::Persecucion || self.esperando() || matches!(self.race.phase, Phase::Lobby | Phase::Results)) {
+            if input.menu && (self.modo == Modo::Ataque || self.esperando() || matches!(self.race.phase, Phase::Lobby | Phase::Results)) {
                 self.back_to_menu();
             } else if input.start {
-                if self.modo == Modo::Persecucion {
-                    self.iniciar_persecucion();
+                if self.modo == Modo::Ataque {
+                    self.iniciar_ataque();
                 } else if self.esperando() {
                     // Hay una carrera en marcha en la que no corro: no se puede empezar otra.
                 } else if self.online {
@@ -549,21 +601,19 @@ impl Game {
             self.last_phase = self.race.phase;
         }
 
-        // Pasado el cartel de "perdiste", vuelve a su casilla de salida, Si fue eliminada se queda quieta hasta la revancha o el menú.
+        // En la carrera, pasado el cartel de "perdiste" vuelve a su casilla en la sala. Si fue eliminada
+        // sigue así hasta la revancha o el menú.
         if let Some(d) = self.derrota {
-            if self.time - d.desde >= DERROTA_S {
+            if self.modo == Modo::Carrera && self.time - d.desde >= DERROTA_S {
                 self.derrota = None;
-                if self.modo == Modo::Persecucion {
-                    self.iniciar_persecucion();
-                } else {
-                    self.place_on_grid();
-                }
+                self.place_on_grid();
             }
         }
 
         let quieta = self.screen == Screen::Menu
             || (self.en_carrera && self.race.phase == Phase::Countdown)
-            || self.derrota.is_some();
+            || self.derrota.is_some()
+            || (self.modo == Modo::Ataque && self.ataque.ganado);
         match self.orbit.filter(|_| !quieta) {
             Some(o) => self.fly_orbit(o, input, dt),
             None => {
@@ -577,8 +627,19 @@ impl Game {
                 }
             }
         }
-        if self.modo == Modo::Persecucion && self.screen == Screen::Playing && !quieta {
-            self.update_persecucion(dt);
+        if input.fire && self.screen == Screen::Playing && !quieta {
+            let f = self.ship.forward();
+            if self.shots.fire(self.ship.position + f * DISPARO_SALIDA, f, self.ship.velocity) {
+                self.disparos_hechos += 1;
+            }
+        }
+        self.shots.update(dt);
+        if self.modo == Modo::Ataque && self.screen == Screen::Playing {
+            self.shots_vs_ovnis(dt);
+        }
+        self.shots_vs_bodies(dt);
+        if self.modo == Modo::Ataque && self.screen == Screen::Playing && !quieta {
+            self.update_ataque(dt);
         }
         match self.orbit {
             // En órbita la cámara va detrás y por encima, mirando hacia el planeta para que se vea.
@@ -634,7 +695,7 @@ impl Game {
     // jugadores conectados en carrera o en sala de espera
     /// Los de mi grupo, para la tabla de la carrera: los que corren (eliminados incluidos) o, si espero, los que esperan.
     fn grupo(&self) -> impl Iterator<Item = &RemotePlayer> {
-        let (solo, espero) = (self.modo == Modo::Persecucion, self.esperando());
+        let (solo, espero) = (self.modo == Modo::Ataque, self.esperando());
         let en_marcha = matches!(self.last_phase, Phase::Countdown | Phase::Racing);
         self.en_linea().filter(move |r| !solo && (!en_marcha || (r.target.progress & ESPERA != 0) == espero))
     }
@@ -674,7 +735,7 @@ impl Game {
             model: self.selected as u8,
             progress: self.progress as u8
                 | if self.eliminado { ELIMINADO } else { 0 }
-                | if self.modo == Modo::Persecucion {
+                | if self.modo == Modo::Ataque {
                     SOLO
                 } else if self.esperando() {
                     ESPERA
@@ -683,6 +744,7 @@ impl Game {
                 },
             finish_ms: self.finish_ms(),
             name: self.name,
+            health: self.vida.round().clamp(0.0, VIDA_MAX) as u8,
         }
     }
 
@@ -774,7 +836,7 @@ mod tests {
     use super::*;
 
     pub(crate) fn rival(id: u32, x: f32) -> RemoteShip {
-        RemoteShip { id, position: Vec3::new(x, 0.0, -10.0), yaw: 0.0, pitch: 0.0, model: 0, progress: 0, finish_ms: 0, name: [0; NAME_LEN] }
+        RemoteShip { id, position: Vec3::new(x, 0.0, -10.0), yaw: 0.0, pitch: 0.0, model: 0, progress: 0, finish_ms: 0, name: [0; NAME_LEN], health: 100 }
     }
 
     pub(crate) fn avanzar(g: &mut Game, segundos: f32) {
@@ -798,7 +860,7 @@ mod tests {
     pub(crate) const NADA: Input = Input {
         forward: false, backward: false, yaw_left: false, yaw_right: false, pitch_up: false, pitch_down: false,
         brake: false, cycle_model: false, start: false, menu: false, toggle_gravity: false, toggle_orbit: false,
-        toggle_view: false, reseed: false, chase: false,
+        toggle_view: false, reseed: false, chase: false, fire: false,
     };
 
     /// Coloca la nave en `pos`, quieta, con la cámara detrás.
@@ -1095,13 +1157,13 @@ mod tests {
     }
 
     #[test]
-    fn la_persecucion_no_se_interrumpe_si_otros_largan_una_carrera_y_no_cuenta_como_tardio() {
+    fn el_ataque_no_se_interrumpe_si_otros_largan_una_carrera_y_no_cuenta_como_tardio() {
         let mut g = Game::new(1);
         g.update(0.05, &Input { chase: true, ..NADA });
         g.set_online(true);
         g.set_race_server(Phase::Countdown as u8, 0);
         g.update(0.05, &Input::default());
-        assert_eq!(g.mode(), Modo::Persecucion, "sigue en persecución");
+        assert_eq!(g.mode(), Modo::Ataque, "sigue en el modo ataque");
         assert!(g.local_state().progress & SOLO != 0);
         let antes = g.ship.position;
         g.update(0.05, &Input { forward: true, ..NADA });
@@ -1112,7 +1174,7 @@ mod tests {
         g.update(0.05, &Input::default());
         g.ship.position = g.course[0].pos;
         g.update(0.05, &Input::default());
-        assert_eq!(g.progress(), 0, "los aros no cuentan en persecución");
+        assert_eq!(g.progress(), 0, "los aros no cuentan en el modo ataque");
 
         // Al salir con la carrera en marcha no entra tarde: queda esperando en la sala.
         g.update(0.05, &Input { menu: true, ..NADA });
@@ -1141,11 +1203,11 @@ mod tests {
         let mut g = Game::new(1);
         g.update(0.05, &Input { chase: true, ..NADA });
         g.set_remote_players(&todos);
-        assert!(ids(&g).is_empty(), "en persecución no se ve a nadie");
+        assert!(ids(&g).is_empty(), "en el modo ataque no se ve a nadie");
 
         let mut g = online_en(Phase::Lobby);
         g.set_remote_players(&todos);
-        assert_eq!(ids(&g), [1, 3], "en la sala se ven todos menos los de persecución");
+        assert_eq!(ids(&g), [1, 3], "en la sala se ven todos menos los del modo ataque");
     }
 
     #[test]

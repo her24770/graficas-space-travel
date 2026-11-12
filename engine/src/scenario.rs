@@ -50,6 +50,20 @@ pub struct MeteorsDef {
     pub period: f32,
 }
 
+/// Luna que gira alrededor de un planeta y sobre sí misma.
+pub struct MoonDef {
+    pub model: &'static str,
+    /// Radio de la luna.
+    pub size: f32,
+    /// Distancia al centro del planeta.
+    pub distance: f32,
+    pub period: f32,
+    pub spin_period: f32,
+    pub inclination: f32,
+    /// Posición inicial en la órbita (radianes).
+    pub phase: f32,
+}
+
 /// Anillos alrededor del planeta
 pub struct RingsDef {
     pub model: &'static str,
@@ -131,6 +145,7 @@ pub struct PlanetDef {
     pub props: &'static [PropDef],
     pub meteors: Option<MeteorsDef>,
     pub rings: Option<RingsDef>,
+    pub moon: Option<MoonDef>,
 }
 
 pub static PLANETS: [PlanetDef; 5] = [
@@ -143,7 +158,7 @@ pub static PLANETS: [PlanetDef; 5] = [
             PropDef { model: "roca", count: 25, size: 1.2, zone: Zone::Anywhere, color: 0x8D8D8D },
             PropDef { model: "edificio", count: 4, size: 2.8, zone: Zone::Land, color: 0xB0BEC5 },
         ],
-        meteors: None, rings: None,
+        meteors: None, rings: None, moon: None,
     },
     PlanetDef {
         name: "AQUA", radius: 10.0, orbit_radius: 190.0, orbit_period: 80.0, spin_period: 30.0,
@@ -155,6 +170,7 @@ pub static PLANETS: [PlanetDef; 5] = [
             PropDef { model: "roca", count: 15, size: 1.2, zone: Zone::High, color: 0x8D8D8D },
         ],
         meteors: None, rings: None,
+        moon: Some(MoonDef { model: "luna", size: 2.2, distance: 27.0, period: 36.0, spin_period: 14.0, inclination: 0.35, phase: 1.0 }),
     },
     PlanetDef {
         name: "TITAN", radius: 24.0, orbit_radius: 320.0, orbit_period: 130.0, spin_period: 25.0,
@@ -163,6 +179,7 @@ pub static PLANETS: [PlanetDef; 5] = [
         gravity: 22.0, relief: 0.0, props: &[],
         meteors: None,
         rings: Some(RingsDef { model: "anillos", scale: 2.3, colors: (0xD8C49A, 0x8A7556) }),
+        moon: None,
     },
     PlanetDef {
         name: "GLACIA", radius: 11.0, orbit_radius: 430.0, orbit_period: 170.0, spin_period: 40.0,
@@ -173,7 +190,7 @@ pub static PLANETS: [PlanetDef; 5] = [
             PropDef { model: "hielo1", count: 15, size: 2.0, zone: Zone::Anywhere, color: 0xE1F5FE },
             PropDef { model: "hielo2", count: 15, size: 2.0, zone: Zone::Anywhere, color: 0xE1F5FE },
         ],
-        meteors: None, rings: None,
+        meteors: None, rings: None, moon: None,
     },
     PlanetDef {
         name: "NEBULA", radius: 17.0, orbit_radius: 520.0, orbit_period: 220.0, spin_period: 18.0,
@@ -181,7 +198,7 @@ pub static PLANETS: [PlanetDef; 5] = [
         material: Material::Gas { a: 0x9C6FD6, b: 0x4FC3C8, seed: 9.0 },
         gravity: 18.0, relief: 0.0, props: &[],
         meteors: Some(MeteorsDef { model: "meteorito", count: 8, size: 3.0, distance: 45.0, spread: 14.0, period: 30.0 }),
-        rings: None,
+        rings: None, moon: None,
     },
 ];
 
@@ -230,6 +247,23 @@ pub fn meteor_position(p: &PlanetDef, m: &MeteorsDef, k: u32, t: f64) -> Vec3 {
 pub fn meteor_velocity(p: &PlanetDef, m: &MeteorsDef, k: u32, t: f64) -> Vec3 {
     const H: f64 = 0.05;
     (meteor_position(p, m, k, t + H) - meteor_position(p, m, k, t - H)) * (1.0 / (2.0 * H) as f32)
+}
+
+/// Posición de la luna de un planeta en el instante `t`: órbita circular inclinada alrededor de él.
+pub fn moon_position(p: &PlanetDef, m: &MoonDef, t: f64) -> Vec3 {
+    let a = m.phase + (2.0 * std::f64::consts::PI * t / m.period as f64) as f32;
+    let plano = crate::Mat4::rotation_x(m.inclination);
+    planet_position(p, t) + plano.transform_dir(Vec3::new(a.cos() * m.distance, 0.0, a.sin() * m.distance))
+}
+
+pub fn moon_velocity(p: &PlanetDef, m: &MoonDef, t: f64) -> Vec3 {
+    const H: f64 = 0.05;
+    (moon_position(p, m, t + H) - moon_position(p, m, t - H)) * (1.0 / (2.0 * H) as f32)
+}
+
+/// Ángulo de giro de la luna sobre su eje en el instante `t`.
+pub fn moon_spin(m: &MoonDef, t: f64) -> f32 {
+    ((2.0 * std::f64::consts::PI * t / m.spin_period as f64) % (2.0 * std::f64::consts::PI)) as f32
 }
 
 /// Velocidad del planeta en su órbita (u/s) en el instante `t`.

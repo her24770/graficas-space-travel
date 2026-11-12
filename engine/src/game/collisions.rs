@@ -101,6 +101,7 @@ impl Game {
         // Primero los objetos y al final el cuerpo: así empujar la nave fuera de un árbol nunca la deja dentro del suelo.
         self.collide_props(dt);
         self.collide_meteors(dt);
+        self.collide_moons(dt);
         self.collide_holes(dt);
         self.collide_ufos(dt);
         for (i, b) in self.bodies().iter().enumerate() {
@@ -161,6 +162,55 @@ impl Game {
         }
     }
 
+    /// Las lunas son esferas sólidas que orbitan: la nave choca contra ellas como contra un cuerpo.
+    pub(super) fn collide_moons(&mut self, dt: f32) {
+        let t = self.world_time;
+        let mut golpes = Vec::new();
+        for p in PLANETS.iter() {
+            let Some(m) = &p.moon else { continue };
+            let centro = scenario::moon_position(p, m, t);
+            if self.ship.position.distance(centro) > m.size + NAVE_RADIO + 1.0 {
+                continue;
+            }
+            let choque = physics::collide(&mut self.ship.position, &mut self.ship.velocity, NAVE_RADIO, centro, scenario::moon_velocity(p, m, t), m.size, dt);
+            if let Some(c) = choque.filter(|c| c.impact_speed > IMPACTO_MIN) {
+                golpes.push((p.name, m.model, c));
+            }
+        }
+        for (body, objeto, c) in golpes {
+            self.registrar_choque(body, Some(objeto), c);
+        }
+    }
+
+    /// Los disparos sueltan chispas al chocar con algo
+    pub(super) fn shots_vs_bodies(&mut self, dt: f32) {
+        if self.shots.is_empty() {
+            return;
+        }
+        let t = self.world_time;
+        let mut solidos: Vec<(Vec3, f32, Vec3)> =
+            self.bodies().iter().enumerate().map(|(i, b)| (b.center, Self::max_surface(i), b.velocity)).collect();
+        for p in PLANETS.iter() {
+            if let Some(m) = &p.moon {
+                solidos.push((scenario::moon_position(p, m, t), m.size, scenario::moon_velocity(p, m, t)));
+            }
+        }
+        let mut impactos = Vec::new();
+        self.shots.retain(|s| {
+            let (a, b) = s.tramo(dt);
+            match solidos.iter().find(|(c, r, _)| shots::segment_hits_sphere(a, b, *c, *r)) {
+                Some(&(c, _, vel)) => {
+                    impactos.push((b, (b - c).normalize(), vel));
+                    false
+                }
+                None => true,
+            }
+        });
+        for (pos, normal, vel) in impactos {
+            self.sparks.burst(pos, normal, vel, 4.0);
+        }
+    }
+
     pub(super) fn registrar_choque(&mut self, body: &'static str, object: Option<&'static str>, c: physics::Contact) {
         // Sin chispas contra el agujero negro ni el ovni: tienen sonido propio.
         if body != "AGUJERO NEGRO" && body != "OVNI" {
@@ -176,12 +226,33 @@ impl Game {
         if self.collisions.len() > 32 {
             self.collisions.remove(0); // nadie los está leyendo: no crecer sin límite
         }
-        self.notice(format!("COLISION: {}", object.unwrap_or(body)), 0xEF5350);
         match body {
             "AGUJERO NEGRO" => self.derrotar(Causa::AgujeroNegro),
             "OVNI" => self.derrotar(Causa::Ovni),
-            _ => {}
+            _ => {
+                let nombre = object.unwrap_or(body);
+                match self.danar(c.impact_speed) {
+                    Some(dano) => self.notice(format!("COLISION: {nombre}  -{dano:.0}%"), 0xEF5350),
+                    None => self.notice(format!("COLISION: {nombre}"), 0xEF5350),
+                }
+                return;
+            }
         }
+        self.notice(format!("COLISION: {}", object.unwrap_or(body)), 0xEF5350);
+    }
+
+    /// Un choque contra algo sólido quita vida según qué tan fuerte fue.
+    pub(super) fn danar(&mut self, impact_speed: f32) -> Option<f32> {
+        if self.derrota.is_some() || self.time < self.invulnerable_hasta {
+            return None;
+        }
+        let dano = (impact_speed * DANO_POR_VELOCIDAD).clamp(DANO_MIN, DANO_MAX).min(self.vida);
+        self.vida -= dano;
+        self.invulnerable_hasta = self.time + INVULNERABLE_S;
+        if self.vida <= 0.0 {
+            self.derrotar(Causa::Destruida);
+        }
+        Some(dano)
     }
 
     /// La nave perdió. En plena carrera queda eliminada y en la sala o los resultados solo ve el cartel y reaparece en el mapa.
@@ -191,12 +262,12 @@ impl Game {
         }
         let elimina = self.modo == Modo::Carrera && self.en_carrera && self.race.phase == Phase::Racing && self.finish_time.is_none() && !self.eliminado;
         self.derrota = Some(Derrota { causa, desde: self.time, elimina });
-        if self.modo == Modo::Persecucion {
-            let t = self.persecucion.tiempo;
-            self.mejor_persecucion = Some(self.mejor_persecucion.map_or(t, |m| m.max(t)));
+        if self.modo == Modo::Ataque {
+            self.guardar_resultado();
         }
         self.orbit = None;
         self.ship.velocity = Vec3::ZERO;
+        self.vida = 0.0;
         if elimina {
             self.eliminado = true;
             self.muerte_time = Some(self.race.time);
@@ -492,5 +563,27 @@ mod tests {
         let choques = g.take_collisions();
         assert!(choques.iter().any(|c| c.body == "AQUA"));
         assert!(choques.len() <= 4, "apoyada no debe avisar en cada cuadro: {}", choques.len());
+    }
+
+    #[test]
+    fn chocar_quita_vida_y_en_cero_la_nave_pierde_y_reaparece_con_vida_llena() {
+        let mut g = jugando();
+        let c = physics::Contact { normal: Vec3::Y, impact_speed: 20.0, body_velocity: Vec3::ZERO };
+        g.registrar_choque("AQUA", None, c);
+        assert_eq!(g.health(), VIDA_MAX - 10.0);
+        g.registrar_choque("AQUA", None, c);
+        assert_eq!(g.health(), VIDA_MAX - 10.0, "el mismo choque no descuenta dos veces");
+        for _ in 0..20 {
+            if g.derrota.is_some() {
+                break;
+            }
+            g.time += INVULNERABLE_S;
+            g.registrar_choque("AQUA", None, c);
+        }
+        assert_eq!(g.derrota.map(|d| d.causa), Some(Causa::Destruida));
+        assert_eq!(g.local_state().health, 0, "los demás ven la barra vacía");
+        avanzar(&mut g, DERROTA_S + 0.2);
+        assert!(g.derrota.is_none());
+        assert_eq!(g.health(), VIDA_MAX, "reaparece con la vida llena");
     }
 }

@@ -8,7 +8,7 @@ use std::time::Instant;
 /// al agrandarla o ponerla en pantalla completa se ve nítida sin volverse lenta.
 const ALTO_INTERNO: usize = 540;
 
-const TECLAS: [(Key, u32); 9] = [
+const TECLAS: [(Key, u32); 10] = [
     (Key::W, bits::FORWARD),
     (Key::S, bits::BACKWARD),
     (Key::A, bits::YAW_LEFT),
@@ -18,6 +18,7 @@ const TECLAS: [(Key, u32); 9] = [
     (Key::Up, bits::PITCH_UP),
     (Key::Down, bits::PITCH_DOWN),
     (Key::Space, bits::BRAKE),
+    (Key::F, bits::FIRE),
 ];
 
 fn medidas(ventana: (usize, usize)) -> (usize, usize) {
@@ -77,7 +78,7 @@ fn main() {
         if let Some(s) = sonidos.as_mut() {
             let jugando = game.screen() == engine::Screen::Playing;
             let (cercania_agujero, cercania_ovni) = if jugando { (game.black_hole_proximity(), game.ufo_proximity()) } else { (0.0, 0.0) };
-            s.actualizar(dt, jugando && b & bits::FORWARD != 0, &choques, game.take_gates_passed(), cercania_agujero, cercania_ovni);
+            s.actualizar(dt, jugando && b & bits::FORWARD != 0, &choques, game.take_gates_passed(), game.take_shots_fired(), cercania_agujero, cercania_ovni);
         }
         game.render(&mut fb);
         window

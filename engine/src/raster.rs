@@ -1,6 +1,7 @@
 //! Rasterizador de triángulos propio: recorte contra el plano cercano, división de
 //! perspectiva, descarte de caras traseras, z-buffer e interpolación de atributos
 //! corregida por perspectiva para el fragment shader.
+use crate::normalmap::{self, NormalMap};
 use crate::shaders::{blend, discards, shade, Fragment, Material, Scene};
 
 const FUERZA_TINTE: f32 = 0.45;
@@ -12,11 +13,18 @@ struct Varyings {
     world: Vec3,
     normal: Vec3,
     local: Vec3,
+    /// Tangente del mapa de normales (cero si el material no usa uno).
+    tangent: Vec3,
 }
 
 impl Varyings {
     fn lerp(a: Varyings, b: Varyings, t: f32) -> Varyings {
-        Varyings { world: a.world.lerp(b.world, t), normal: a.normal.lerp(b.normal, t), local: a.local.lerp(b.local, t) }
+        Varyings {
+            world: a.world.lerp(b.world, t),
+            normal: a.normal.lerp(b.normal, t),
+            local: a.local.lerp(b.local, t),
+            tangent: a.tangent.lerp(b.tangent, t),
+        }
     }
 }
 
@@ -40,6 +48,14 @@ pub fn draw_mesh(
     // Con normales por vértice el sombreado es suave; sin ellas, plano por cara.
     let normals: Vec<Vec3> = mesh.normals.iter().map(|n| model.transform_dir(*n).normalize()).collect();
     let smooth = !normals.is_empty();
+    // Mapa de normales: la tangente de cada vértice (dirección en que crece `u` de la textura) pasa al mundo
+    // con el modelo, igual que las normales. Solo se calcula para los materiales que lo usan.
+    let mapped = scene.normal_maps && material.normal_map().is_some();
+    let tangents: Vec<Vec3> = if mapped {
+        mesh.vertices.iter().map(|v| model.transform_dir(normalmap::sphere_tangent(v.normalize())).normalize()).collect()
+    } else {
+        Vec::new()
+    };
     let mut drawn = 0;
 
     for (ti, t) in mesh.triangles.iter().enumerate() {
@@ -57,12 +73,17 @@ pub fn draw_mesh(
         let face = (world[idx[1]] - world[idx[0]]).cross(world[idx[2]] - world[idx[0]]).normalize();
         let tri = idx.map(|i| ClipVertex {
             pos: clip[i],
-            var: Varyings { world: world[i], normal: if smooth { normals[i] } else { face }, local: mesh.vertices[i] },
+            var: Varyings {
+                world: world[i],
+                normal: if smooth { normals[i] } else { face },
+                local: mesh.vertices[i],
+                tangent: if mapped { tangents[i] } else { Vec3::ZERO },
+            },
         });
 
         let (poly, n) = clip_near(tri);
         for j in 1..n.saturating_sub(1) {
-            if fill_triangle(fb, [poly[0], poly[j], poly[j + 1]], material, scene) {
+            if fill_triangle(fb, [poly[0], poly[j], poly[j + 1]], material, scene, mapped) {
                 drawn += 1;
             }
         }
@@ -109,8 +130,26 @@ fn clip_near(tri: [ClipVertex; 3]) -> ([ClipVertex; 4], usize) {
     (out, n)
 }
 
+/// Nivel de mipmap del mapa de normales para un triángulo: cuántos texels cubre cada píxel.
+/// `pixel_area2` es el doble del área del triángulo en píxeles (la que ya calcula el rasterizador).
+/// Se compara el área que ocupa en la textura con la que ocupa en pantalla.
+fn normal_map_lod(tri: &[ClipVertex; 3], pixel_area2: f32) -> f32 {
+    let dirs = tri.map(|v| v.var.local.normalize());
+    // En el polo la longitud no está definida: ahí el relieve se aplana en vez de centellear.
+    if dirs.iter().any(|d| d.y.abs() > 0.9995) {
+        return f32::MAX;
+    }
+    let uv = dirs.map(normalmap::sphere_uv);
+    // Un triángulo que cruza la costura (u = 0 / 1) se desenvuelve para medirlo.
+    let unwrap = |du: f32| if du > 0.5 { du - 1.0 } else if du < -0.5 { du + 1.0 } else { du };
+    let (du1, du2) = (unwrap(uv[1].0 - uv[0].0) * normalmap::WIDTH as f32, unwrap(uv[2].0 - uv[0].0) * normalmap::WIDTH as f32);
+    let (dv1, dv2) = ((uv[1].1 - uv[0].1) * normalmap::HEIGHT as f32, (uv[2].1 - uv[0].1) * normalmap::HEIGHT as f32);
+    let texel_area2 = (du1 * dv2 - du2 * dv1).abs();
+    NormalMap::lod_for((texel_area2 / pixel_area2).sqrt())
+}
+
 /// Rasteriza un triángulo en coordenadas de recorte. Devuelve false si se descartó.
-fn fill_triangle(fb: &mut Framebuffer, tri: [ClipVertex; 3], material: &Material, scene: &Scene) -> bool {
+fn fill_triangle(fb: &mut Framebuffer, tri: [ClipVertex; 3], material: &Material, scene: &Scene, mapped: bool) -> bool {
     let (w, h) = (fb.width as f32, fb.height as f32);
     let mut p = [(0.0f32, 0.0f32, 0.0f32); 3];
     let mut ndc = [(0.0f32, 0.0f32); 3];
@@ -133,6 +172,8 @@ fn fill_triangle(fb: &mut Framebuffer, tri: [ClipVertex; 3], material: &Material
     if area.abs() < 1e-9 {
         return false;
     }
+
+    let lod = if mapped { normal_map_lod(&tri, area.abs()) } else { 0.0 };
 
     let min_x = p.iter().map(|v| v.0).fold(f32::INFINITY, f32::min).floor().max(0.0) as usize;
     let max_x = p.iter().map(|v| v.0).fold(f32::NEG_INFINITY, f32::max).ceil().min(w - 1.0).max(0.0) as usize;
@@ -159,7 +200,13 @@ fn fill_triangle(fb: &mut Framebuffer, tri: [ClipVertex; 3], material: &Material
             let (q0, q1, q2) = (b0 * inv_w[0], b1 * inv_w[1], b2 * inv_w[2]);
             let k = 1.0 / (q0 + q1 + q2);
             let mix = |f: fn(&Varyings) -> Vec3| (f(&tri[0].var) * q0 + f(&tri[1].var) * q1 + f(&tri[2].var) * q2) * k;
-            let frag = Fragment { world: mix(|v| v.world), normal: mix(|v| v.normal), local: mix(|v| v.local) };
+            let frag = Fragment {
+                world: mix(|v| v.world),
+                normal: mix(|v| v.normal),
+                local: mix(|v| v.local),
+                tangent: if mapped { mix(|v| v.tangent) } else { Vec3::ZERO },
+                lod,
+            };
             // Un píxel descartado (hueco de los anillos) no escribe color ni profundidad.
             if discards(material, &frag) {
                 continue;
@@ -176,7 +223,7 @@ mod tests {
     use super::*;
 
     fn escena() -> Scene {
-        Scene { time: 0.0, light_pos: Vec3::new(0.0, 0.0, 100.0), eye: Vec3::new(0.0, 0.0, 5.0) }
+        Scene { time: 0.0, light_pos: Vec3::new(0.0, 0.0, 100.0), eye: Vec3::new(0.0, 0.0, 5.0), normal_maps: true }
     }
 
     fn triangulo(z: f32) -> Mesh {
@@ -256,4 +303,43 @@ mod tests {
         assert!(project(&camara(), Vec3::new(0.0, 0.0, 50.0), 64, 64).is_none());
         assert!(project(&camara(), Vec3::ZERO, 64, 64).is_some());
     }
+
+    fn esfera_rocosa() -> Material {
+        Material::Rocky { sea: 0x1E5FB8, land: 0x3E8E41, peak: 0x8D7B68, seed: 4.0 }
+    }
+
+    fn dibujar_esfera(maps: bool) -> (Framebuffer, usize) {
+        let mut fb = Framebuffer::new(160, 160);
+        let esfera = crate::procedural::icosphere(4);
+        let model = Mat4::translation(Vec3::new(0.0, 0.0, -3.0)) * Mat4::scale(Vec3::new(2.0, 2.0, 2.0));
+        let scene = Scene { normal_maps: maps, light_pos: Vec3::new(0.0, 0.0, 100.0), ..escena() };
+        let n = draw_mesh(&mut fb, &esfera, &model, &camara(), &esfera_rocosa(), &scene);
+        (fb, n)
+    }
+
+    #[test]
+    fn el_mapa_de_normales_agrega_detalle_sin_agregar_triangulos() {
+        let (con, n_con) = dibujar_esfera(true);
+        let (sin, n_sin) = dibujar_esfera(false);
+        assert_eq!(n_con, n_sin);
+        let distintos = con.pixels.iter().zip(&sin.pixels).filter(|(a, b)| a != b).count();
+        assert!(distintos > 500, "solo {distintos} píxeles cambiaron");
+        // Más variedad de tonos: el relieve rompe el degradado liso.
+        let tonos = |fb: &Framebuffer| fb.pixels.iter().copied().collect::<std::collections::HashSet<u32>>().len();
+        assert!(tonos(&con) > tonos(&sin), "{} vs {}", tonos(&con), tonos(&sin));
+    }
+
+    fn vertice(local: Vec3) -> ClipVertex {
+        ClipVertex { pos: Vec4 { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }, var: Varyings { world: Vec3::ZERO, normal: local, local, tangent: Vec3::ZERO } }
+    }
+
+    #[test]
+    fn el_lod_del_mapa_sube_cuando_cada_pixel_cubre_mas_texels() {
+        let tri = [vertice(Vec3::new(0.5, 0.1, 0.8)), vertice(Vec3::new(0.52, 0.1, 0.8)), vertice(Vec3::new(0.5, 0.12, 0.8))];
+        // El mismo triángulo con 16 veces menos píxeles (4 veces menos por lado): 2 niveles más.
+        let (cerca, lejos) = (normal_map_lod(&tri, 4.0), normal_map_lod(&tri, 0.25));
+        assert!(lejos > cerca + 1.9 && lejos < cerca + 2.1, "{cerca} {lejos}");
+        assert_eq!(normal_map_lod(&tri, 1e9), 0.0, "si cada texel cubre varios píxeles se usa el nivel más fino");
+    }
+
 }

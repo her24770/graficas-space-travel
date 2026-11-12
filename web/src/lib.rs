@@ -71,6 +71,7 @@ impl App {
                     model: s.model,
                     progress: s.progress,
                     name: s.name,
+                    health: s.health,
                 })));
             }
         }
@@ -89,6 +90,10 @@ impl App {
     /// Aros cruzados desde la última llamada.
     pub fn take_gates_passed(&mut self) -> u32 {
         self.game.take_gates_passed()
+    }
+
+    pub fn take_shots_fired(&mut self) -> u32 {
+        self.game.take_shots_fired()
     }
 
     /// Siguiente mensaje que JS debe enviar por el WebSocket (vacío si no hay más).
@@ -128,6 +133,7 @@ impl App {
                         progress: p.state.progress,
                         finish_ms: p.finish_ms,
                         name: p.state.name,
+                        health: p.state.health,
                     })
                     .collect();
                 self.game.set_remote_players(&rivals);

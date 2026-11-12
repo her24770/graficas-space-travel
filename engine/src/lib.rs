@@ -9,6 +9,7 @@ pub mod game;
 pub mod hud;
 pub mod input;
 pub mod math;
+pub mod normalmap;
 pub mod obj;
 pub mod orbit;
 pub mod physics;
@@ -21,6 +22,7 @@ pub mod rng;
 pub mod scenario;
 pub mod shaders;
 pub mod ship;
+pub mod shots;
 pub mod sparks;
 pub mod terrain;
 

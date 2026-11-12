@@ -62,7 +62,7 @@ impl Game {
         let v = View {
             vp,
             frustum: &frustum,
-            scene: Scene { time: self.time, light_pos: Vec3::ZERO, eye },
+            scene: Scene { time: self.time, light_pos: Vec3::ZERO, eye, normal_maps: true },
             focal: fb.height as f32 * 0.5 / (FOV_Y * 0.5).tan(),
             eye,
         };
@@ -104,6 +104,13 @@ impl Game {
                 }
             }
 
+            // Luna orbita al planeta y gira sobre sí misma.
+            if let (Some(m), Some(mesh)) = (&p.moon, &self.moon_meshes[i]) {
+                let centro = scenario::moon_position(p, m, t);
+                let model = Mat4::translation(centro) * Mat4::rotation_y(scenario::moon_spin(m, t)) * Mat4::scale(Vec3::new(m.size, m.size, m.size));
+                self.draw_object(fb, &v, &mut st, mesh, &model, centro, m.size, &Material::Moon);
+            }
+
             // Objetos de superficie: giran con el planeta porque cuelgan de su misma matriz. Solo de cerca.
             if pos.distance(eye) < p.radius * PROPS_DISTANCIA {
                 let planeta = Mat4::translation(pos) * rot;
@@ -138,11 +145,11 @@ impl Game {
             self.draw_object(fb, &v, &mut st, mesh, &model, centro, u.size * 1.1, &Material::Ufo);
         }
 
-        // Ovnis modo persecucion
-        if self.modo == Modo::Persecucion && !menu {
+        // Ovnis del modo ataque
+        if self.modo == Modo::Ataque && !menu {
             let r = chase::CAZADOR_RADIO;
             if let Some(mesh) = self.ufo_meshes.first() {
-                for o in &self.persecucion.ovnis {
+                for o in &self.ataque.ovnis {
                     let model = Mat4::translation(o.position) * Mat4::rotation_y(self.time * 2.0) * Mat4::rotation_z(0.25) * Mat4::scale(Vec3::new(r, r, r));
                     self.draw_object(fb, &v, &mut st, mesh, &model, o.position, r * 1.1, &Material::Ufo);
                 }
@@ -152,7 +159,7 @@ impl Game {
         // Puntos de control (en carrera se ven los que faltan; el siguiente resalta)
         let racing = matches!(self.race.phase, Phase::Racing | Phase::Countdown) && !self.esperando();
         let desde = if racing { self.progress } else { 0 };
-        let aros = if self.modo == Modo::Persecucion { self.course.len() } else { 0 };
+        let aros = if self.modo == Modo::Ataque { self.course.len() } else { 0 };
         for (i, g) in self.course.iter().enumerate().skip(desde.max(aros)) {
             let (yaw, pitch) = scenario::orientation(g.dir);
             let model = Mat4::translation(g.pos) * Mat4::rotation_y(yaw) * Mat4::rotation_x(pitch);
@@ -189,6 +196,7 @@ impl Game {
                 self.draw_object(fb, &v, &mut st, mesh, &model, self.ship.position, escala, &material);
             }
             self.sparks.draw(fb, &v.vp);
+            self.shots.draw(fb, &v.vp);
             self.draw_hud(fb, &v, &st);
         }
         st

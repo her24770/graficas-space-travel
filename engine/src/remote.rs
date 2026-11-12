@@ -19,6 +19,8 @@ pub struct RemoteShip {
     /// Milisegundos de carrera al terminar; 0 = aún no termina.
     pub finish_ms: u32,
     pub name: [u8; NAME_LEN],
+    /// Vida de la nave en porcentaje (0 a 100).
+    pub health: u8,
 }
 
 const SUAVIZADO: f32 = 12.0;
@@ -48,6 +50,7 @@ impl RemotePlayer {
         s.progress = t.progress;
         s.finish_ms = t.finish_ms;
         s.name = t.name;
+        s.health = t.health;
     }
 }
 
@@ -56,7 +59,7 @@ mod tests {
     use super::*;
 
     fn nave(x: f32, yaw: f32) -> RemoteShip {
-        RemoteShip { id: 1, position: Vec3::new(x, 0.0, 0.0), yaw, pitch: 0.0, model: 0, progress: 0, finish_ms: 0, name: [0; NAME_LEN] }
+        RemoteShip { id: 1, position: Vec3::new(x, 0.0, 0.0), yaw, pitch: 0.0, model: 0, progress: 0, finish_ms: 0, name: [0; NAME_LEN], health: 100 }
     }
 
     #[test]
