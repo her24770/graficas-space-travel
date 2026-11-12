@@ -213,17 +213,23 @@ impl Game {
         hud::shade_rect(fb, 0, 0, fb.width as i32, h, 0x000000, 130);
         hud::centered(fb, cx, h / 3, s * 4, 0xEF5350, "PERDISTE");
         hud::centered(fb, cx, h / 3 + 40 * si, s, 0xFFFFFF, d.causa.mensaje());
-        let pie = if self.modo == Modo::Ataque {
-            let r = self.ataque.resultado();
-            format!("DESTRUISTE {}/{} OVNIS EN {}   {} PUNTOS", self.ataque.destruidos, chase::OVNIS_ATAQUE, fmt_time(r.tiempo), r.puntos)
-        } else if d.elimina {
-            let t = self.muerte_time.unwrap_or(self.race.time);
-            format!("PASASTE {}/{} AROS EN {}", self.progress, GATE_COUNT, fmt_time(t))
+        if self.modo == Modo::Ataque {
+            let pie = format!("DESTRUISTE {}/{} OVNIS EN {}", self.ataque.destruidos, chase::OVNIS_ATAQUE, fmt_time(self.ataque.tiempo));
+            hud::centered(fb, cx, h / 3 + 60 * si, s, 0x90A4AE, &pie);
+            // Los puntos solo si alcanzó a destruir algún ovni.
+            if self.ataque.destruidos > 0 {
+                hud::centered(fb, cx, h / 3 + 75 * si, s * 2, COLOR_SIGUIENTE, &format!("{} PUNTOS", self.ataque.resultado().puntos));
+            }
+            hud::centered(fb, cx, h / 3 + 100 * si, s, COLOR_SIGUIENTE, "ENTER VOLVER A JUGAR   M MENU");
         } else {
-            String::new()
-        };
-        hud::centered(fb, cx, h / 3 + 60 * si, s, 0x90A4AE, &pie);
-        hud::centered(fb, cx, h / 3 + 85 * si, s, COLOR_SIGUIENTE, "ENTER VOLVER A JUGAR   M MENU");
+            let mut y = h / 3 + 60 * si;
+            if d.elimina {
+                let t = self.muerte_time.unwrap_or(self.race.time);
+                hud::centered(fb, cx, y, s, 0x90A4AE, &format!("PASASTE {}/{} AROS EN {}", self.progress, GATE_COUNT, fmt_time(t)));
+                y += 15 * si;
+            }
+            hud::centered(fb, cx, y, s, 0x90A4AE, "REGRESANDO A SALA DE ESPERA...");
+        }
     }
 
     /// Pantalla de inicio: título, vista previa de la nave, controles y estado de la sala.

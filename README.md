@@ -71,7 +71,7 @@ Desde el menú, `P` entra a un modo de un jugador, con o sin conexión: **5 ovni
 - No atraviesan el sol, los planetas ni los agujeros negros: puedes esconderte detrás de un planeta, pero chocar contra él te quita vida.
 - Una flecha roja con la distancia señala a cada ovni; avisa de `PELIGRO` si el más cercano se acerca y suena más fuerte cuanto más cerca.
 - **Con conexión** también se juega, y es individual: cada jugador en modo ataque tiene su propia partida, no ve a nadie y nadie lo ve a él. Es independiente de la carrera: el servidor no lo espera para cerrarla y, si alguien larga una, sigue en su partida.
-- Si un ovni te alcanza, chocas con un agujero negro o tu vida llega a 0, ves cuántos ovnis destruiste y la partida se reinicia sola. `Enter` reinicia ya, `M` vuelve al menú.
+- Si un ovni te alcanza, chocas con un agujero negro o tu vida llega a 0, aparece el cartel de "perdiste" con cuántos ovnis destruiste y tus puntos. El cartel espera a que elijas: `Enter` vuelve a jugar y `M` vuelve al menú.
 
 ## La carrera
 
@@ -79,7 +79,7 @@ Un circuito de 10 puntos de control (anillos) que serpentea entre las órbitas d
 
 1. `Enter` inicia la cuenta regresiva: todos van a su casilla de salida y esperan.
 2. Se cruzan los puntos **en orden**; gana quien completa los 10 primero.
-3. Si chocas con un agujero negro o un ovni, o tu vida llega a 0, quedas **eliminado**: ves el cartel de "perdiste" con los aros y el tiempo que llevabas, y vuelves a la sala de espera, donde puedes volar libre mientras los demás terminan. Sales en la tabla como eliminado, pero los que siguen corriendo ya no ven tu nave.
+3. Si chocas con un agujero negro o un ovni, o tu vida llega a 0, quedas **eliminado**: ves durante 5 s el cartel de "perdiste" con los aros y el tiempo que llevabas y vuelves solo a la sala de espera, donde puedes volar libre mientras los demás terminan. Sales en la tabla como eliminado, pero los que siguen corriendo ya no ven tu nave.
 4. Al terminar todos aparecen los resultados; `Enter` da la revancha.
 
 En pantalla: velocidad, triángulos dibujados y objetos visibles (frustum culling), posiciones, minimapa del sistema, nombres y distancias de los planetas. Las esferas cambian de detalle según la distancia (LOD).
