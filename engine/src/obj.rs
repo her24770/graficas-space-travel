@@ -10,6 +10,7 @@ pub struct Mesh {
     pub normals: Vec<Vec3>,
     /// Color 0xRRGGBB de cada triángulo. Vacío = un solo material.
     pub colors: Vec<u32>,
+    pub glow: Vec<bool>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -33,20 +34,21 @@ impl fmt::Display for ObjError {
 
 const COLOR_SIN_MATERIAL: u32 = 0xB0B0B0;
 
-/// Colores `Kd` de cada `newmtl`. Blender los guarda en lineal; se pasan a sRGB
-pub fn parse_mtl(text: &str) -> HashMap<String, u32> {
-    let mut out = HashMap::new();
+pub fn parse_mtl(text: &str) -> HashMap<String, (u32, bool)> {
+    let mut out: HashMap<String, (u32, bool)> = HashMap::new();
     let mut actual: Option<String> = None;
     for line in text.lines() {
         let mut parts = line.split_whitespace();
-        match parts.next() {
-            Some("newmtl") => actual = parts.next().map(str::to_string),
-            Some("Kd") => {
-                let c: Vec<f32> = parts.filter_map(|s| s.parse().ok()).collect();
-                if let (Some(name), [r, g, b, ..]) = (&actual, c.as_slice()) {
-                    let ch = |v: f32| (v.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0).round() as u32;
-                    out.insert(name.clone(), (ch(*r) << 16) | (ch(*g) << 8) | ch(*b));
-                }
+        let clave = parts.next();
+        let c: Vec<f32> = parts.filter_map(|s| s.parse().ok()).collect();
+        match (clave, &actual, c.as_slice()) {
+            (Some("newmtl"), _, _) => actual = line.split_whitespace().nth(1).map(str::to_string),
+            (Some("Kd"), Some(name), [r, g, b, ..]) => {
+                let ch = |v: f32| (v.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0).round() as u32;
+                out.entry(name.clone()).or_insert((COLOR_SIN_MATERIAL, false)).0 = (ch(*r) << 16) | (ch(*g) << 8) | ch(*b);
+            }
+            (Some("Ke"), Some(name), [r, g, b, ..]) => {
+                out.entry(name.clone()).or_insert((COLOR_SIN_MATERIAL, false)).1 = r + g + b > 0.0;
             }
             _ => {}
         }
@@ -108,8 +110,9 @@ pub fn parse_with_mtl(bytes: &[u8], mtl: Option<&str>) -> Result<Mesh, ObjError>
                 for k in 1..idx.len() - 1 {
                     mesh.triangles.push([idx[0], idx[k], idx[k + 1]]);
                     if let Some(m) = &materiales {
-                        let color = material.as_ref().and_then(|n| m.get(n)).copied().unwrap_or(COLOR_SIN_MATERIAL);
+                        let (color, brilla) = material.as_ref().and_then(|n| m.get(n)).copied().unwrap_or((COLOR_SIN_MATERIAL, false));
                         mesh.colors.push(color);
+                        mesh.glow.push(brilla);
                     }
                 }
             }
@@ -138,6 +141,7 @@ impl Mesh {
             ],
             normals: Vec::new(),
             colors: Vec::new(),
+            glow: Vec::new(),
         }
     }
 
@@ -170,6 +174,7 @@ impl Mesh {
             triangles: self.triangles.clone(),
             normals: self.normals.clone(),
             colors: self.colors.clone(),
+            glow: self.glow.clone(),
         }
     }
 
@@ -180,6 +185,7 @@ impl Mesh {
             triangles: self.triangles.clone(),
             normals: self.normals.iter().map(giro).collect(),
             colors: self.colors.clone(),
+            glow: self.glow.clone(),
         }
     }
 
@@ -200,6 +206,7 @@ impl Mesh {
             triangles: self.triangles.clone(),
             normals: self.normals.clone(),
             colors: self.colors.clone(),
+            glow: self.glow.clone(),
         }
     }
 }
@@ -241,11 +248,13 @@ f 1 2 3
 ";
         let mtl = "newmtl rojo
 Kd 1 0 0
+Ke 1 0.2 0
 newmtl azul
 Kd 0 0 1
 ";
         let m = parse_with_mtl(obj, Some(mtl)).unwrap();
         assert_eq!(m.colors, vec![0xFF0000, 0x0000FF, COLOR_SIN_MATERIAL]);
+        assert_eq!(m.glow, vec![true, false, false], "solo el material con Ke brilla");
         assert!(parse(obj).unwrap().colors.is_empty());
     }
 

@@ -57,6 +57,7 @@ pub enum Material {
     Meteor,
     /// Regolito gris con mares oscuros y cráteres con borde claro. Espera un modelo esférico de radio 1.
     Moon,
+    Magma,
 }
 
 impl Material {
@@ -79,6 +80,7 @@ impl Material {
             Material::Gas { a, .. } | Material::Ice { a, .. } | Material::Ring { a, .. } => a,
             Material::Meteor => 0xD02A05,
             Material::Moon => 0xB9B5AE,
+            Material::Magma => 0xFF6A00,
             Material::BlackHole => 0xAB47BC,
             Material::Ufo => 0x7DFFB2,
         }
@@ -300,6 +302,14 @@ pub fn shade(m: &Material, f: &Fragment, s: &Scene) -> u32 {
             let fres = (1.0 - n.dot(view).max(0.0)).powi(2);
             let cristal = rgb(0x0f6b48).lerp(rgb(0x7dffb2), fres) * (0.6 + 0.4 * sheen);
             pack(c.lerp(cristal, cupula))
+        }
+        Material::Magma => {
+            // Mismos tonos que las grietas del planeta de lava; no depende de la luz del sol.
+            let t = s.time;
+            let h = fbm(f.local * 6.0 + Vec3::new(0.0, t * 0.4, 0.0), 3);
+            let magma = rgb(0xD02A05).lerp(rgb(0xFFC21F), smoothstep(0.3, 0.8, h));
+            let pulse = 0.85 + 0.15 * (t * 2.0 + h * 6.0).sin();
+            pack(magma * (1.1 * pulse))
         }
         Material::Moon => {
             let q = f.local;

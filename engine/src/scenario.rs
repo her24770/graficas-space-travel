@@ -148,7 +148,7 @@ pub struct PlanetDef {
     pub moon: Option<MoonDef>,
 }
 
-pub static PLANETS: [PlanetDef; 5] = [
+pub static PLANETS: [PlanetDef; 6] = [
     PlanetDef {
         name: "FERRO", radius: 7.0, orbit_radius: 110.0, orbit_period: 45.0, spin_period: 20.0,
         phase: 0.5, inclination: 0.05, tilt: 0.1,
@@ -199,6 +199,17 @@ pub static PLANETS: [PlanetDef; 5] = [
         gravity: 18.0, relief: 0.0, props: &[],
         meteors: Some(MeteorsDef { model: "meteorito", count: 8, size: 3.0, distance: 45.0, spread: 14.0, period: 30.0 }),
         rings: None, moon: None,
+    },
+    // Planeta volcánico: usa el shader de lava de los meteoritos
+    PlanetDef {
+        name: "IGNIS", radius: 13.0, orbit_radius: 700.0, orbit_period: 300.0, spin_period: 35.0,
+        phase: 3.3, inclination: -0.06, tilt: 0.15,
+        material: Material::Meteor,
+        gravity: 16.0, relief: 0.0,
+        props: &[
+            PropDef { model: "volcan", count: 12, size: 2.5, zone: Zone::Anywhere, color: 0x4E342E },
+        ],
+        meteors: None, rings: None, moon: None,
     },
 ];
 
