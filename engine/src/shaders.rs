@@ -55,6 +55,8 @@ pub enum Material {
     Ufo,
     /// Roca oscura con cráteres y grietas de lava que brillan
     Meteor,
+    /// Regolito gris con mares oscuros y cráteres con borde claro. Espera un modelo esférico de radio 1.
+    Moon,
 }
 
 impl Material {
@@ -76,6 +78,7 @@ impl Material {
             Material::Rocky { land, .. } => land,
             Material::Gas { a, .. } | Material::Ice { a, .. } | Material::Ring { a, .. } => a,
             Material::Meteor => 0xD02A05,
+            Material::Moon => 0xB9B5AE,
             Material::BlackHole => 0xAB47BC,
             Material::Ufo => 0x7DFFB2,
         }
@@ -297,6 +300,18 @@ pub fn shade(m: &Material, f: &Fragment, s: &Scene) -> u32 {
             let fres = (1.0 - n.dot(view).max(0.0)).powi(2);
             let cristal = rgb(0x0f6b48).lerp(rgb(0x7dffb2), fres) * (0.6 + 0.4 * sheen);
             pack(c.lerp(cristal, cupula))
+        }
+        Material::Moon => {
+            let q = f.local;
+            let dust = fbm(q * 6.0, 4);
+            let mut c = rgb(0x8D8A86).lerp(rgb(0xB9B5AE), dust);
+            let maria = smoothstep(0.50, 0.58, fbm(q * 1.8 + Vec3::new(3.1, 0.7, 5.2), 4));
+            c = c.lerp(rgb(0x4E4C4B), maria * 0.8);
+            // Cráteres: fondo oscuro rodeado de un borde claro.
+            let cr = fbm(q * 7.0 + Vec3::new(1.7, 8.3, 2.9), 2);
+            c = c.lerp(rgb(0x3B3A39), smoothstep(0.30, 0.22, cr) * 0.7);
+            c = c.lerp(rgb(0xD8D4CB), smoothstep(0.30, 0.34, cr) * smoothstep(0.40, 0.34, cr) * 0.5);
+            pack(c * (0.05 + 0.95 * lambert))
         }
         Material::Meteor => {
             let q = f.local;

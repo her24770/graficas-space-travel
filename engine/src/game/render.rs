@@ -104,6 +104,13 @@ impl Game {
                 }
             }
 
+            // Luna orbita al planeta y gira sobre sí misma.
+            if let (Some(m), Some(mesh)) = (&p.moon, &self.moon_meshes[i]) {
+                let centro = scenario::moon_position(p, m, t);
+                let model = Mat4::translation(centro) * Mat4::rotation_y(scenario::moon_spin(m, t)) * Mat4::scale(Vec3::new(m.size, m.size, m.size));
+                self.draw_object(fb, &v, &mut st, mesh, &model, centro, m.size, &Material::Moon);
+            }
+
             // Objetos de superficie: giran con el planeta porque cuelgan de su misma matriz. Solo de cerca.
             if pos.distance(eye) < p.radius * PROPS_DISTANCIA {
                 let planeta = Mat4::translation(pos) * rot;

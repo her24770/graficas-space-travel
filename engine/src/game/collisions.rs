@@ -101,6 +101,7 @@ impl Game {
         // Primero los objetos y al final el cuerpo: así empujar la nave fuera de un árbol nunca la deja dentro del suelo.
         self.collide_props(dt);
         self.collide_meteors(dt);
+        self.collide_moons(dt);
         self.collide_holes(dt);
         self.collide_ufos(dt);
         for (i, b) in self.bodies().iter().enumerate() {
@@ -154,6 +155,26 @@ impl Game {
                 if let Some(c) = choque.filter(|c| c.impact_speed > IMPACTO_MIN) {
                     golpes.push((p.name, m.model, c));
                 }
+            }
+        }
+        for (body, objeto, c) in golpes {
+            self.registrar_choque(body, Some(objeto), c);
+        }
+    }
+
+    /// Las lunas son esferas sólidas que orbitan: la nave choca contra ellas como contra un cuerpo.
+    pub(super) fn collide_moons(&mut self, dt: f32) {
+        let t = self.world_time;
+        let mut golpes = Vec::new();
+        for p in PLANETS.iter() {
+            let Some(m) = &p.moon else { continue };
+            let centro = scenario::moon_position(p, m, t);
+            if self.ship.position.distance(centro) > m.size + NAVE_RADIO + 1.0 {
+                continue;
+            }
+            let choque = physics::collide(&mut self.ship.position, &mut self.ship.velocity, NAVE_RADIO, centro, scenario::moon_velocity(p, m, t), m.size, dt);
+            if let Some(c) = choque.filter(|c| c.impact_speed > IMPACTO_MIN) {
+                golpes.push((p.name, m.model, c));
             }
         }
         for (body, objeto, c) in golpes {

@@ -207,6 +207,7 @@ pub struct Game {
     placements: Vec<Vec<PropInstance>>,
     /// Malla del meteorito de cada planeta (radio 1) y de sus anillos (radio exterior 1).
     meteor_meshes: Vec<Option<Mesh>>,
+    moon_meshes: Vec<Option<Mesh>>,
     ring_meshes: Vec<Option<Mesh>>,
     /// Malla de cada agujero negro
     hole_meshes: Vec<Mesh>,
@@ -312,6 +313,16 @@ impl Game {
             .iter()
             .map(|p| p.meteors.as_ref().map(|m| modelo_aparte(m.model).unwrap_or_else(|| procedural::icosphere(1))))
             .collect();
+        let moon_meshes = PLANETS
+            .iter()
+            .map(|p| {
+                p.moon.as_ref().map(|m| {
+                    let mut mesh = modelo_aparte(m.model).unwrap_or_else(|| procedural::icosphere(2));
+                    mesh.recompute_normals();
+                    mesh
+                })
+            })
+            .collect();
         let ring_meshes = PLANETS.iter().map(|p| p.rings.as_ref().and_then(|r| modelo_aparte(r.model))).collect();
         let ufo_meshes = UFOS
             .iter()
@@ -359,6 +370,7 @@ impl Game {
             prop_mesh_of,
             placements: Vec::new(),
             meteor_meshes,
+            moon_meshes,
             ring_meshes,
             hole_meshes,
             ufo_meshes,
