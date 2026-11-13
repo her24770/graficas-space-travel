@@ -260,8 +260,17 @@ impl Game {
         if self.derrota.is_some() {
             return;
         }
-        let elimina = self.modo == Modo::Carrera && self.en_carrera && self.race.phase == Phase::Racing && self.finish_time.is_none() && !self.eliminado;
+        let elimina_pelea = self.peleando();
+        let elimina = elimina_pelea
+            || (self.modo == Modo::Carrera && self.en_carrera && self.race.phase == Phase::Racing && self.finish_time.is_none() && !self.eliminado);
         self.derrota = Some(Derrota { causa, desde: self.time, elimina });
+        if elimina_pelea {
+            self.fuera = true;
+            self.vida = 0.0;
+            self.orbit = None;
+            self.ship.velocity = Vec3::ZERO;
+            return;
+        }
         if self.modo == Modo::Ataque {
             self.guardar_resultado();
         }

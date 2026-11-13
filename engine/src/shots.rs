@@ -61,6 +61,11 @@ impl Shots {
         true
     }
 
+    /// Agrega un rayo sin esperar la cadencia (para dibujar los disparos de otros jugadores).
+    pub fn spawn(&mut self, from: Vec3, dir: Vec3, ship_vel: Vec3) {
+        self.list.push(Shot { pos: from, vel: dir * VELOCIDAD + ship_vel, edad: 0.0 });
+    }
+
     pub fn update(&mut self, dt: f32) {
         self.recarga = (self.recarga - dt).max(0.0);
         for s in &mut self.list {
@@ -76,10 +81,14 @@ impl Shots {
     }
 
     pub fn draw(&self, fb: &mut Framebuffer, view_proj: &Mat4) {
+        self.draw_color(fb, view_proj, COLOR);
+    }
+
+    pub fn draw_color(&self, fb: &mut Framebuffer, view_proj: &Mat4, color: u32) {
         let grosor = 2 * (fb.height / 270).max(1) as i32;
         for s in &self.list {
             let cola = s.pos - s.vel.normalize() * LARGO;
-            draw_segment(fb, view_proj, cola, s.pos, COLOR, grosor);
+            draw_segment(fb, view_proj, cola, s.pos, color, grosor);
         }
     }
 }

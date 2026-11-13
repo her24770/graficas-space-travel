@@ -6,6 +6,11 @@ pub const ELIMINADO: u8 = 0x80;
 pub const SOLO: u8 = 0x40; //juego individual
 pub const ESPERA: u8 = 0x20; // en sala de espera
 pub const PROGRESO: u8 = 0x1F;
+/// Bits de `RemoteShip::fight` (mismos valores que `protocol`).
+pub const PELEA: u8 = 0x01;
+pub const PELEA_FUERA: u8 = 0x02;
+pub const PELEA_ESPERA: u8 = 0x04;
+pub const DISPARANDO: u8 = 0x08;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RemoteShip {
@@ -21,6 +26,10 @@ pub struct RemoteShip {
     pub name: [u8; NAME_LEN],
     /// Vida de la nave en porcentaje (0 a 100).
     pub health: u8,
+    /// Modo pelea: bits `PELEA`, `PELEA_FUERA`, `PELEA_ESPERA` y `DISPARANDO`.
+    pub fight: u8,
+    /// Naves que derribó en la pelea actual (lo cuenta el servidor).
+    pub kills: u8,
 }
 
 const SUAVIZADO: f32 = 12.0;
@@ -33,11 +42,13 @@ pub fn wrap_angle(a: f32) -> f32 {
 pub(crate) struct RemotePlayer {
     pub shown: RemoteShip,
     pub target: RemoteShip,
+    /// Segundos para dibujar su siguiente rayo mientras dispara.
+    pub recarga: f32,
 }
 
 impl RemotePlayer {
     pub fn new(s: RemoteShip) -> Self {
-        Self { shown: s, target: s }
+        Self { shown: s, target: s, recarga: 0.0 }
     }
 
     pub fn update(&mut self, dt: f32) {
@@ -51,6 +62,8 @@ impl RemotePlayer {
         s.finish_ms = t.finish_ms;
         s.name = t.name;
         s.health = t.health;
+        s.fight = t.fight;
+        s.kills = t.kills;
     }
 }
 
@@ -59,7 +72,7 @@ mod tests {
     use super::*;
 
     fn nave(x: f32, yaw: f32) -> RemoteShip {
-        RemoteShip { id: 1, position: Vec3::new(x, 0.0, 0.0), yaw, pitch: 0.0, model: 0, progress: 0, finish_ms: 0, name: [0; NAME_LEN], health: 100 }
+        RemoteShip { id: 1, position: Vec3::new(x, 0.0, 0.0), yaw, pitch: 0.0, model: 0, progress: 0, finish_ms: 0, name: [0; NAME_LEN], health: 100, fight: 0, kills: 0 }
     }
 
     #[test]

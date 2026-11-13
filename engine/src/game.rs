@@ -23,11 +23,13 @@ use std::f32::consts::PI;
 
 mod chase;
 mod collisions;
+mod pelea;
 mod render;
 mod ui;
 
 use chase::{Ataque, Resultado};
 pub use chase::Modo;
+pub use pelea::MIN_PELEA;
 
 const FOV_Y: f32 = 60.0 * PI / 180.0;
 const FONDO: u32 = 0x02020A;
@@ -115,6 +117,8 @@ enum Causa {
     Ovni,
     /// La vida llegó a 0 de tanto chocar.
     Destruida,
+    /// Otro jugador la derribó a disparos en la pelea.
+    Derribada,
 }
 
 impl Causa {
@@ -123,6 +127,7 @@ impl Causa {
             Causa::AgujeroNegro => "CAISTE EN UN AGUJERO NEGRO, YA NO PUEDES ESCAPAR",
             Causa::Ovni => "LOS ALIENS TE RAPTARON, YA NO PUEDES ESCAPAR",
             Causa::Destruida => "TU NAVE QUEDO DESTRUIDA DE TANTO CHOCAR",
+            Causa::Derribada => "TU NAVE FUE DERRIBADA",
         }
     }
 }
@@ -205,6 +210,24 @@ pub struct Game {
     ataque: Ataque,
     /// Mejor partida del modo ataque: más puntos y, con empate, menos tiempo.
     mejor_ataque: Option<Resultado>,
+    /// Fases de la pelea entre jugadores (las dicta el servidor, como las de la carrera).
+    pelea: Race,
+    last_pelea: Phase,
+    /// Entré a la pelea actual en su cuenta regresiva.
+    en_pelea: bool,
+    /// Me derribaron en la pelea actual: miro hasta que termine.
+    fuera: bool,
+    fight_request: bool,
+    /// Rivales a los que les pegué y aún no se avisa al servidor.
+    golpes: Vec<u32>,
+    mis_derribos: u8,
+    /// Id del ganador de la última pelea (0 = sin ganador).
+    ganador: u32,
+    derribado_por: Option<String>,
+    /// Estoy disparando este cuadro (los demás dibujan mis rayos).
+    disparando: bool,
+    /// Rayos de los rivales: solo se dibujan.
+    rayos_rivales: Shots,
     /// Segundos de carrera en que quedó eliminado.
     muerte_time: Option<f32>,
     /// Vida de la nave (0 a `VIDA_MAX`): baja al chocar y en 0 la nave pierde.
@@ -384,6 +407,17 @@ impl Game {
             modo: Modo::Carrera,
             ataque: Ataque::new(),
             mejor_ataque: None,
+            pelea: Race::new(),
+            last_pelea: Phase::Lobby,
+            en_pelea: false,
+            fuera: false,
+            fight_request: false,
+            golpes: Vec::new(),
+            mis_derribos: 0,
+            ganador: 0,
+            derribado_por: None,
+            disparando: false,
+            rayos_rivales: Shots::new(),
             muerte_time: None,
             vida: VIDA_MAX,
             invulnerable_hasta: 0.0,
@@ -420,7 +454,7 @@ impl Game {
 
     /// Coloca la nave en su casilla de salida, en reposo.
     pub fn place_on_grid(&mut self) {
-        let (pos, yaw, pitch) = scenario::grid_slot(self.slot);
+        let (pos, yaw, pitch) = if self.modo == Modo::Pelea { scenario::fight_slot(self.slot) } else { scenario::grid_slot(self.slot) };
         self.ship.reset(pos, yaw, pitch);
         self.camera = ChaseCamera::new(&self.ship);
         self.orbit = None;
@@ -548,15 +582,25 @@ impl Game {
             } else if input.chase {
                 self.screen = Screen::Playing;
                 self.iniciar_ataque();
+            } else if input.fight {
+                self.screen = Screen::Playing;
+                self.iniciar_pelea();
             }
         } else {
             if input.cycle_model {
                 self.next_model(1);
             }
-            if input.menu && (self.modo == Modo::Ataque || self.esperando() || matches!(self.race.phase, Phase::Lobby | Phase::Results)) {
+            let puede_salir = match self.modo {
+                Modo::Ataque => true,
+                Modo::Pelea => !self.atado_a_la_pelea(),
+                Modo::Carrera => self.esperando() || matches!(self.race.phase, Phase::Lobby | Phase::Results),
+            };
+            if input.menu && puede_salir {
                 self.back_to_menu();
             } else if input.start {
-                if self.modo == Modo::Ataque {
+                if self.modo == Modo::Pelea {
+                    self.pedir_pelea();
+                } else if self.modo == Modo::Ataque {
                     self.iniciar_ataque();
                 } else if self.esperando() {
                     // Hay una carrera en marcha en la que no corro: no se puede empezar otra.
@@ -578,7 +622,8 @@ impl Game {
                     ViewMode::FirstPerson => ViewMode::ThirdPerson,
                 };
             }
-            if input.toggle_orbit && !(self.en_carrera && self.race.phase == Phase::Countdown) {
+            let en_cuenta = (self.en_carrera && self.race.phase == Phase::Countdown) || (self.en_pelea && self.pelea.phase == Phase::Countdown);
+            if input.toggle_orbit && !en_cuenta {
                 self.toggle_orbit();
             }
         }
@@ -604,11 +649,13 @@ impl Game {
             }
             self.last_phase = self.race.phase;
         }
+        self.pelea.update(dt, self.online);
+        self.update_fases_pelea();
 
         // En la carrera, pasado el cartel de "perdiste" vuelve a su casilla en la sala. Si fue eliminada
         // sigue así hasta la revancha o el menú.
         if let Some(d) = self.derrota {
-            if self.modo == Modo::Carrera && self.time - d.desde >= DERROTA_S {
+            if self.modo != Modo::Ataque && self.time - d.desde >= DERROTA_S {
                 self.derrota = None;
                 self.place_on_grid();
             }
@@ -616,6 +663,7 @@ impl Game {
 
         let quieta = self.screen == Screen::Menu
             || (self.en_carrera && self.race.phase == Phase::Countdown)
+            || (self.en_pelea && self.pelea.phase == Phase::Countdown)
             || self.derrota.is_some()
             || (self.modo == Modo::Ataque && self.ataque.ganado);
         match self.orbit.filter(|_| !quieta) {
@@ -631,7 +679,8 @@ impl Game {
                 }
             }
         }
-        if input.fire && self.screen == Screen::Playing && !quieta {
+        self.disparando = input.fire && self.screen == Screen::Playing && !quieta;
+        if self.disparando {
             let f = self.ship.forward();
             if self.shots.fire(self.ship.position + f * DISPARO_SALIDA, f, self.ship.velocity) {
                 self.disparos_hechos += 1;
@@ -641,7 +690,9 @@ impl Game {
         if self.modo == Modo::Ataque && self.screen == Screen::Playing {
             self.shots_vs_ovnis(dt);
         }
+        self.shots_vs_rivales(dt);
         self.shots_vs_bodies(dt);
+        self.update_rayos_rivales(dt);
         if self.modo == Modo::Ataque && self.screen == Screen::Playing && !quieta {
             self.update_ataque(dt);
         }
@@ -663,6 +714,10 @@ impl Game {
     fn back_to_menu(&mut self) {
         self.screen = Screen::Menu;
         self.modo = Modo::Carrera;
+        self.en_pelea = false;
+        self.fuera = false;
+        self.derribado_por = None;
+        self.rayos_rivales.clear();
         self.derrota = None;
         self.eliminado = false;
         self.muerte_time = None;
@@ -699,16 +754,25 @@ impl Game {
     // jugadores conectados en carrera o en sala de espera
     /// Los de mi grupo, para la tabla de la carrera: los que corren (eliminados incluidos) o, si espero, los que esperan.
     fn grupo(&self) -> impl Iterator<Item = &RemotePlayer> {
-        let (solo, espero) = (self.modo == Modo::Ataque, self.esperando());
+        let (solo, espero) = (self.modo != Modo::Carrera, self.esperando());
         let en_marcha = matches!(self.last_phase, Phase::Countdown | Phase::Racing);
         self.en_linea().filter(move |r| !solo && (!en_marcha || (r.target.progress & ESPERA != 0) == espero))
     }
 
     /// Los que veo volar. Un eliminado vuelve a la sala y puede moverse: los que siguen corriendo
     /// no lo ven (solo figura en la tabla); otro eliminado, o quien espera, sí.
+    /// En el modo pelea se ven los del modo pelea (ver `ve_en_pelea`).
     fn rivales(&self) -> impl Iterator<Item = &RemotePlayer> {
         let corriendo = matches!(self.last_phase, Phase::Countdown | Phase::Racing) && self.en_carrera && !self.eliminado;
-        self.grupo().filter(move |r| !(corriendo && r.target.progress & ELIMINADO != 0))
+        let pelea = self.modo == Modo::Pelea;
+        let carrera: Vec<u32> = if pelea { Vec::new() } else { self.grupo().map(|r| r.target.id).collect() };
+        self.remotes.iter().filter(move |r| {
+            if pelea {
+                self.ve_en_pelea(r)
+            } else {
+                carrera.contains(&r.target.id) && !(corriendo && r.target.progress & ELIMINADO != 0)
+            }
+        })
     }
 
     fn check_gates(&mut self) {
@@ -739,7 +803,7 @@ impl Game {
             model: self.selected as u8,
             progress: self.progress as u8
                 | if self.eliminado { ELIMINADO } else { 0 }
-                | if self.modo == Modo::Ataque {
+                | if self.modo != Modo::Carrera {
                     SOLO
                 } else if self.esperando() {
                     ESPERA
@@ -749,6 +813,8 @@ impl Game {
             finish_ms: self.finish_ms(),
             name: self.name,
             health: self.vida.round().clamp(0.0, VIDA_MAX) as u8,
+            fight: self.bits_pelea(),
+            kills: self.mis_derribos,
         }
     }
 
@@ -772,6 +838,12 @@ impl Game {
         if !online {
             self.remotes.clear();
             self.race.reset();
+            self.pelea.reset();
+            self.last_pelea = Phase::Lobby;
+            self.en_pelea = false;
+            self.fuera = false;
+            self.ganador = 0;
+            self.mis_derribos = 0;
             self.en_carrera = false;
             self.last_phase = Phase::Lobby;
             self.slot = 0;
@@ -840,7 +912,7 @@ mod tests {
     use super::*;
 
     pub(crate) fn rival(id: u32, x: f32) -> RemoteShip {
-        RemoteShip { id, position: Vec3::new(x, 0.0, -10.0), yaw: 0.0, pitch: 0.0, model: 0, progress: 0, finish_ms: 0, name: [0; NAME_LEN], health: 100 }
+        RemoteShip { id, position: Vec3::new(x, 0.0, -10.0), yaw: 0.0, pitch: 0.0, model: 0, progress: 0, finish_ms: 0, name: [0; NAME_LEN], health: 100, fight: 0, kills: 0 }
     }
 
     pub(crate) fn avanzar(g: &mut Game, segundos: f32) {
@@ -864,7 +936,7 @@ mod tests {
     pub(crate) const NADA: Input = Input {
         forward: false, backward: false, yaw_left: false, yaw_right: false, pitch_up: false, pitch_down: false,
         brake: false, cycle_model: false, start: false, menu: false, toggle_gravity: false, toggle_orbit: false,
-        toggle_view: false, reseed: false, chase: false, fire: false,
+        toggle_view: false, reseed: false, chase: false, fire: false, fight: false,
     };
 
     /// Coloca la nave en `pos`, quieta, con la cámara detrás.

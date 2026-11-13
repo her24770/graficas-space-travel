@@ -38,6 +38,8 @@ impl Resultado {
 pub enum Modo {
     Carrera,
     Ataque,
+    /// Pelea entre jugadores, último en pie (ver `pelea.rs`).
+    Pelea,
 }
 
 /// Un ovni que persigue a la nave.

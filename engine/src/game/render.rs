@@ -159,7 +159,7 @@ impl Game {
         // Puntos de control (en carrera se ven los que faltan; el siguiente resalta)
         let racing = matches!(self.race.phase, Phase::Racing | Phase::Countdown) && !self.esperando();
         let desde = if racing { self.progress } else { 0 };
-        let aros = if self.modo == Modo::Ataque { self.course.len() } else { 0 };
+        let aros = if self.modo != Modo::Carrera { self.course.len() } else { 0 };
         for (i, g) in self.course.iter().enumerate().skip(desde.max(aros)) {
             let (yaw, pitch) = scenario::orientation(g.dir);
             let model = Mat4::translation(g.pos) * Mat4::rotation_y(yaw) * Mat4::rotation_x(pitch);
@@ -197,6 +197,7 @@ impl Game {
             }
             self.sparks.draw(fb, &v.vp);
             self.shots.draw(fb, &v.vp);
+            self.draw_rayos_rivales(fb, &v.vp);
             self.draw_hud(fb, &v, &st);
         }
         st
