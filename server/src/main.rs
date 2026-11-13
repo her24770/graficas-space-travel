@@ -1,5 +1,6 @@
 //! Servidor de sincronización: reparte la posición de cada nave y lleva el reloj de la carrera.
 //! No simula nada; las órbitas y la física viven en cada cliente.
+mod fight;
 mod race;
 
 use axum::{
@@ -12,6 +13,7 @@ use axum::{
     Router,
 };
 use protocol::{decode_client, ClientMsg, Player, PlayerState, ServerMsg, Snapshot, MAX_PLAYERS};
+use fight::FightState;
 use race::RaceState;
 use std::{
     collections::HashMap,
@@ -24,7 +26,7 @@ use std::{
 use tokio::sync::broadcast::{self, error::RecvError};
 
 const TICK: Duration = Duration::from_millis(50); // 20 snapshots por segundo
-const MAX_MENSAJE: usize = 64; // bytes; un estado válido pesa 23
+const MAX_MENSAJE: usize = 64; // bytes; un estado válido pesa 26
 /// Quien deja de mandar posiciones (pestaña en segundo plano, red caída) desaparece para los demás.
 const INACTIVO_MS: u32 = if cfg!(test) { 800 } else { 5000 };
 
@@ -36,6 +38,7 @@ struct Entry {
 struct World {
     players: HashMap<u32, Entry>,
     race: RaceState,
+    fight: FightState,
 }
 
 impl World {
@@ -63,7 +66,7 @@ impl Shared {
 
 fn new_state() -> AppState {
     Arc::new(Shared {
-        world: Mutex::new(World { players: HashMap::new(), race: RaceState::new() }),
+        world: Mutex::new(World { players: HashMap::new(), race: RaceState::new(), fight: FightState::new() }),
         next_id: AtomicU32::new(0),
         conectados: AtomicUsize::new(0),
         tx: broadcast::channel(16).0,
@@ -90,15 +93,27 @@ fn spawn_ticker(state: AppState) {
                 w.players.retain(|_, e| now.wrapping_sub(e.last_seen) < INACTIVO_MS);
                 let states = w.states();
                 w.race.tick(now, &states);
+                w.fight.tick(now, &states);
                 if w.players.is_empty() {
                     continue;
                 }
                 let players = w
                     .players
                     .iter()
-                    .map(|(id, e)| Player { id: *id, state: e.state, finish_ms: w.race.finish_ms(*id) })
+                    .map(|(id, e)| Player { id: *id, state: e.state, finish_ms: w.race.finish_ms(*id), kills: w.fight.kills(*id) })
                     .collect();
-                ServerMsg::Snapshot(Snapshot { clock_ms: now, phase: w.race.phase, phase_ms: w.race.phase_ms(now), players }).encode()
+                let hits = w.fight.take_hits();
+                ServerMsg::Snapshot(Snapshot {
+                    clock_ms: now,
+                    phase: w.race.phase,
+                    phase_ms: w.race.phase_ms(now),
+                    players,
+                    fight_phase: w.fight.phase,
+                    fight_ms: w.fight.phase_ms(now),
+                    fight_winner: w.fight.winner,
+                    hits,
+                })
+                .encode()
             };
             let _ = state.tx.send(snapshot); // sin receptores no pasa nada
         }
@@ -123,6 +138,13 @@ fn on_message(state: &Shared, id: u32, msg: ClientMsg) {
             w.players.insert(id, Entry { state: s, last_seen: now });
         }
         ClientMsg::State(_) => {}
+        ClientMsg::StartFight => {
+            let states = w.states();
+            w.fight.start(now, &states);
+        }
+        ClientMsg::Hit { target } => {
+            w.fight.hit(now, id, target);
+        }
         ClientMsg::StartRace => {
             if w.race.start(now) {
                 for e in w.players.values_mut() {
@@ -304,6 +326,45 @@ mod tests {
         assert!(s.phase_ms < 3000);
         assert_eq!(s.players.iter().find(|p| p.id == id_b).unwrap().state.progress, 0);
         assert!(s.clock_ms > 0 || s.phase_ms < 3000, "el snapshot trae el reloj del mundo");
+    }
+
+    #[tokio::test]
+    async fn en_la_pelea_el_impacto_le_llega_a_todos_y_el_ultimo_en_pie_gana() {
+        let url = arrancar().await;
+        let (mut a, _) = connect_async(&url).await.unwrap();
+        let (mut b, _) = connect_async(&url).await.unwrap();
+        let (id_a, id_b) = (id_de(&mut a).await, id_de(&mut b).await);
+        let peleador = PlayerState { fight: protocol::PELEA, ..estado(0.0) };
+        enviar(&mut a, ClientMsg::State(peleador)).await;
+        enviar(&mut b, ClientMsg::State(peleador)).await;
+        esperar_snapshot(&mut a, |s| s.players.len() == 2).await;
+
+        enviar(&mut a, ClientMsg::StartFight).await;
+        esperar_snapshot(&mut a, |s| s.fight_phase == PHASE_COUNTDOWN).await;
+        // La cuenta regresiva dura 3 s; los dos siguen mandando su estado para no quedar inactivos.
+        let s = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                enviar(&mut a, ClientMsg::State(peleador)).await;
+                enviar(&mut b, ClientMsg::State(peleador)).await;
+                if let ServerMsg::Snapshot(s) = siguiente(&mut a).await {
+                    if s.fight_phase == protocol::PHASE_RACING {
+                        return s;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("la pelea debía empezar");
+        assert_eq!(s.fight_winner, 0);
+
+        enviar(&mut a, ClientMsg::Hit { target: id_b }).await;
+        let s = esperar_snapshot(&mut b, |s| !s.hits.is_empty()).await;
+        assert_eq!(s.hits[0], protocol::Hit { victim: id_b, shooter: id_a });
+
+        enviar(&mut b, ClientMsg::State(PlayerState { fight: protocol::PELEA | protocol::PELEA_FUERA, ..estado(0.0) })).await;
+        let s = esperar_snapshot(&mut a, |s| s.fight_phase == protocol::PHASE_RESULTS).await;
+        assert_eq!(s.fight_winner, id_a);
+        assert_eq!(s.players.iter().find(|p| p.id == id_a).unwrap().kills, 1);
     }
 
     #[tokio::test]

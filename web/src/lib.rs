@@ -60,6 +60,12 @@ impl App {
             if self.game.take_start_request() {
                 self.outgoing.push_back(encode_client(&ClientMsg::StartRace));
             }
+            if self.game.take_fight_request() {
+                self.outgoing.push_back(encode_client(&ClientMsg::StartFight));
+            }
+            for target in self.game.take_hits_out() {
+                self.outgoing.push_back(encode_client(&ClientMsg::Hit { target }));
+            }
             self.send_acc += dt;
             if self.send_acc >= INTERVALO_ENVIO {
                 self.send_acc = 0.0;
@@ -72,6 +78,7 @@ impl App {
                     progress: s.progress,
                     name: s.name,
                     health: s.health,
+                    fight: s.fight,
                 })));
             }
         }
@@ -119,6 +126,9 @@ impl App {
 
                 self.game.sync_clock(snap.clock_ms);
                 self.game.set_race_server(snap.phase, snap.phase_ms);
+                let mis_derribos = snap.players.iter().find(|p| p.id == me).map_or(0, |p| p.kills);
+                self.game.set_fight_server(snap.fight_phase, snap.fight_ms, snap.fight_winner, mis_derribos);
+                let golpes: Vec<(u32, u32)> = snap.hits.iter().map(|h| (h.victim, h.shooter)).collect();
                 let rivals: Vec<RemoteShip> = snap
                     .players
                     .iter()
@@ -134,9 +144,12 @@ impl App {
                         finish_ms: p.finish_ms,
                         name: p.state.name,
                         health: p.state.health,
+                        fight: p.state.fight,
+                        kills: p.kills,
                     })
                     .collect();
                 self.game.set_remote_players(&rivals);
+                self.game.apply_hits(&golpes);
             }
             None => {}
         }
@@ -184,7 +197,11 @@ mod tests {
             clock_ms: 90_000,
             phase: fase,
             phase_ms: 500,
-            players: ids.iter().map(|&id| Player { id, state: estado, finish_ms: 0 }).collect(),
+            players: ids.iter().map(|&id| Player { id, state: estado, finish_ms: 0, kills: 0 }).collect(),
+            fight_phase: PHASE_LOBBY,
+            fight_ms: 0,
+            fight_winner: 0,
+            hits: Vec::new(),
         })
         .encode()
     }
@@ -197,6 +214,11 @@ mod tests {
         assert_eq!(engine::remote::ESPERA, protocol::ESPERA);
         const { assert!(protocol::GATE_COUNT <= engine::remote::PROGRESO) } // los aros caben en los bits de progreso
         assert_eq!(engine::NAME_LEN, NAME_LEN);
+        assert_eq!(engine::remote::PELEA, protocol::PELEA);
+        assert_eq!(engine::remote::PELEA_FUERA, protocol::PELEA_FUERA);
+        assert_eq!(engine::remote::PELEA_ESPERA, protocol::PELEA_ESPERA);
+        assert_eq!(engine::remote::DISPARANDO, protocol::DISPARANDO);
+        assert_eq!(engine::game::MIN_PELEA, 2, "lo mismo que pide el servidor");
         assert_eq!(Phase::Lobby as u8, PHASE_LOBBY);
         assert_eq!(Phase::Countdown as u8, PHASE_COUNTDOWN);
         assert_eq!(Phase::Racing as u8, PHASE_RACING);
@@ -250,6 +272,42 @@ mod tests {
         assert_eq!(app.game.phase(), Phase::Countdown);
         assert_eq!(app.game.remote_count(), 2, "yo no cuento como rival");
         assert!(app.status().contains("3 jugadores"));
+    }
+
+    #[test]
+    fn b_y_enter_piden_la_pelea_y_los_impactos_viajan_por_la_red() {
+        let mut app = App::new(64, 36);
+        app.net_message(&ServerMsg::Welcome { id: 1 }.encode());
+        let rival = PlayerState { fight: PELEA, ..PlayerState::default() };
+        let snap = |fase: u8, hits: Vec<Hit>| {
+            ServerMsg::Snapshot(Snapshot {
+                clock_ms: 1000,
+                phase: PHASE_LOBBY,
+                phase_ms: 0,
+                players: vec![Player { id: 2, state: rival, finish_ms: 0, kills: 0 }],
+                fight_phase: fase,
+                fight_ms: 0,
+                fight_winner: 0,
+                hits,
+            })
+            .encode()
+        };
+        app.net_message(&snap(PHASE_LOBBY, vec![]));
+        app.set_input(engine::input::bits::FIGHT);
+        app.frame(0.01);
+        app.set_input(engine::input::bits::START);
+        app.frame(0.01);
+        app.set_input(0);
+        app.frame(0.05); // el estado sale cada 0.05 s
+        let mensajes: Vec<_> = std::iter::from_fn(|| Some(app.take_outgoing()).filter(|m| !m.is_empty())).collect();
+        assert!(mensajes.iter().any(|m| decode_client(m) == Some(ClientMsg::StartFight)));
+        assert!(mensajes.iter().filter_map(|m| decode_client(m)).any(|m| matches!(m, ClientMsg::State(s) if s.fight & PELEA != 0)));
+
+        app.net_message(&snap(PHASE_COUNTDOWN, vec![]));
+        app.frame(0.01);
+        app.net_message(&snap(PHASE_RACING, vec![Hit { victim: 1, shooter: 2 }]));
+        app.frame(0.01);
+        assert!(app.game.health() < 100.0, "el impacto del servidor me quitó vida");
     }
 
     #[test]

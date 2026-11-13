@@ -105,6 +105,12 @@ impl Game {
             self.draw_derrota(fb, s);
             return;
         }
+        if self.modo == Modo::Pelea {
+            self.draw_pelea(fb, v, s, m, line);
+            self.draw_minimap(fb, s as i32, m);
+            self.draw_derrota(fb, s);
+            return;
+        }
 
         // Carrera
         let cx = w / 2;
@@ -205,6 +211,65 @@ impl Game {
         hud::label(fb, m, h - m - line, s, 0x78909C, "F DISPARAR   ENTER REINICIAR   M MENU");
     }
 
+    /// HUD de la pelea: fase, cuántos quedan, flechas hacia los rivales vivos y la tabla.
+    pub(super) fn draw_pelea(&self, fb: &mut Framebuffer, v: &View, s: usize, m: i32, line: i32) {
+        let (w, h) = (fb.width as i32, fb.height as i32);
+        let (cx, si) = (w / 2, s as i32);
+        let tabla = self.peleadores();
+        let vivos = tabla.iter().filter(|p| p.vivo).count();
+        match self.pelea.phase {
+            _ if self.esperando_pelea() => banner(fb, s, "PELEA EN CURSO", "MIRA Y ESPERA A QUE TERMINE   M MENU"),
+            Phase::Lobby => {
+                let pista = format!("{} EN LA SALA   ENTER EMPEZAR (MIN {})   M MENU", self.en_sala_de_pelea(), pelea::MIN_PELEA);
+                banner(fb, s, "SALA DE PELEA", &pista);
+            }
+            Phase::Countdown => {
+                let n = self.pelea.countdown_number().unwrap_or(1).to_string();
+                hud::centered(fb, cx, h / 3, s * 10, COLOR_SIGUIENTE, &n);
+                hud::centered(fb, cx, h / 3 + 90 * si, s * 2, 0xFFFFFF, "PREPARATE   F DISPARA");
+            }
+            Phase::Racing => {
+                hud::centered(fb, cx, m, s * 2, 0xFFFFFF, &fmt_time(self.pelea.time));
+                let estado = if self.fuera { "TE DERRIBARON! MIRANDO EL FINAL".to_string() } else { format!("QUEDAN {vivos}   DERRIBOS {}", self.mis_derribos) };
+                hud::centered(fb, cx, m + 2 * line + 4 * si, s, if self.fuera { 0xEF9A9A } else { 0xFFFFFF }, &estado);
+                // Flecha en el borde hacia los rivales que no están a la vista (a los visibles ya los marca su nombre).
+                if self.peleando() {
+                    for r in self.rivales() {
+                        let visible = raster::project(&v.vp, r.shown.position, fb.width, fb.height)
+                            .is_some_and(|(x, y, _)| x > 0.0 && x < w as f32 && y > 0.0 && y < h as f32);
+                        if !visible {
+                            marcador(fb, v, s, m, r.shown.position, r.shown.position.distance(self.ship.position), color_jugador(r.shown.id));
+                        }
+                    }
+                }
+            }
+            Phase::Results => {
+                let titulo = match self.ganador {
+                    0 => "SIN GANADOR".to_string(),
+                    id if Some(id) == self.my_id => "GANASTE!".to_string(),
+                    id => format!("GANO {}", self.nombre_de(id)),
+                };
+                banner(fb, s, &titulo, "ENTER REVANCHA   M MENU");
+            }
+        }
+
+        // Tabla: vivos primero y por derribos.
+        let base = h - m - line * (tabla.len() as i32 + 1);
+        let en_sala = self.pelea.phase == Phase::Lobby || self.esperando_pelea();
+        hud::label(fb, m, base - line, s, 0x90A4AE, if en_sala { "EN LA SALA DE PELEA" } else { "PELEADORES" });
+        for (i, p) in tabla.iter().enumerate() {
+            let texto = if en_sala {
+                p.label.clone()
+            } else {
+                format!("{} {} {}", p.label, if p.vivo { "VIVO" } else { "FUERA" }, p.kills)
+            };
+            hud::label(fb, m, base + i as i32 * line, s, if p.vivo || en_sala { p.color } else { 0x607D8B }, &texto);
+        }
+        if self.derrota.is_none() {
+            hud::label(fb, w - m - hud::width("F DISPARAR", s), h - m - line, s, 0x78909C, "F DISPARAR");
+        }
+    }
+
     /// Vista de "perdiste" con la causa y qué pasa después.
     pub(super) fn draw_derrota(&self, fb: &mut Framebuffer, s: usize) {
         let Some(d) = &self.derrota else { return };
@@ -213,7 +278,13 @@ impl Game {
         hud::shade_rect(fb, 0, 0, fb.width as i32, h, 0x000000, 130);
         hud::centered(fb, cx, h / 3, s * 4, 0xEF5350, "PERDISTE");
         hud::centered(fb, cx, h / 3 + 40 * si, s, 0xFFFFFF, d.causa.mensaje());
-        if self.modo == Modo::Ataque {
+        if self.modo == Modo::Pelea {
+            if let Some(quien) = self.derribado_por.as_ref().filter(|_| d.causa == Causa::Derribada) {
+                hud::centered(fb, cx, h / 3 + 60 * si, s * 2, COLOR_SIGUIENTE, &format!("TE DERRIBO {quien}"));
+            }
+            let pie = if d.elimina { "QUEDASTE FUERA: MIRA EL FINAL DE LA PELEA" } else { "REGRESANDO A LA ARENA..." };
+            hud::centered(fb, cx, h / 3 + 85 * si, s, 0x90A4AE, pie);
+        } else if self.modo == Modo::Ataque {
             let pie = format!("DESTRUISTE {}/{} OVNIS EN {}", self.ataque.destruidos, chase::OVNIS_ATAQUE, fmt_time(self.ataque.tiempo));
             hud::centered(fb, cx, h / 3 + 60 * si, s, 0x90A4AE, &pie);
             // Los puntos solo si alcanzó a destruir algún ovni.
@@ -258,6 +329,7 @@ impl Game {
             ("ESPACIO", "FRENAR"),
             ("ENTER", "EMPEZAR CARRERA"),
             ("P", "ATAQUE (SOLO)"),
+            ("B", "PELEA (ONLINE)"),
             ("TAB", "CAMBIAR DE NAVE"),
             ("M", "VOLVER AL MENU"),
             ("G", "GRAVEDAD SI O NO"),
@@ -312,7 +384,7 @@ impl Game {
         let color = if (self.time * 2.0) as i32 % 2 == 0 { oro } else { 0xFFF59D };
         let invitacion = if self.esperando() { "ENTER = SALA DE ESPERA" } else { "ENTER = CARRERA" };
         hud::centered(fb, cx, h - m - 40 * si, s * 2, color, invitacion);
-        hud::centered(fb, cx, h - m - 20 * si, s * 2, 0xEF9A9A, "P = ATAQUE");
+        hud::centered(fb, cx, h - m - 20 * si, s * 2, 0xEF9A9A, "P = ATAQUE   B = PELEA");
     }
 
     /// Mapa visto desde arriba: sol, órbitas, planetas, circuito y jugadores.
@@ -339,7 +411,7 @@ impl Game {
             hud::dot(fb, x, y, ((pl.radius / ALCANCE * size as f32) as i32).max(s), pl.material.tint());
         }
         let racing = self.race.phase == Phase::Racing && !self.esperando();
-        let aros = if self.modo == Modo::Ataque { 0 } else { self.course.len() };
+        let aros = if self.modo == Modo::Carrera { self.course.len() } else { 0 };
         for (i, g) in self.course.iter().enumerate().take(aros) {
             let (x, y) = to_map(g.pos);
             let (color, r) = if racing && i == self.progress { (COLOR_SIGUIENTE, s) } else if i < self.progress && racing { (0x2E7D32, 1) } else { (COLOR_PUNTO, 1) };

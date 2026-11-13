@@ -338,6 +338,19 @@ pub fn ship_orientation(dir: Vec3) -> (f32, f32) {
 }
 
 /// Casilla de salida número `slot`: en fila antes del primer punto de control, mirándolo.
+/// Centro de la arena de pelea: debajo del sol, lejos de planetas, agujeros negros y ovnis.
+pub const FIGHT_CENTER: Vec3 = Vec3 { x: 0.0, y: -260.0, z: 0.0 };
+/// Radio del círculo en el que salen los jugadores de la pelea.
+pub const FIGHT_RING: f32 = 70.0;
+
+/// Casilla de salida de la pelea: en círculo alrededor del centro, mirando hacia adentro.
+pub fn fight_slot(slot: usize) -> (Vec3, f32, f32) {
+    let a = slot as f32 * 2.0 * PI / 8.0;
+    let pos = FIGHT_CENTER + Vec3::new(a.cos() * FIGHT_RING, 0.0, a.sin() * FIGHT_RING);
+    let (yaw, pitch) = orientation((FIGHT_CENTER - pos).normalize());
+    (pos, yaw, pitch)
+}
+
 pub fn grid_slot(slot: usize) -> (Vec3, f32, f32) {
     let c = course();
     let dir = (c[0].pos - c[GATE_COUNT - 1].pos).normalize();

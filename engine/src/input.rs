@@ -22,6 +22,8 @@ pub mod bits {
     pub const CHASE: u32 = 16384;
     /// Mientras se mantiene presionada (F) la nave dispara.
     pub const FIRE: u32 = 32768;
+    /// Se envía solo en el cuadro en que se presiona la tecla (B): pelea entre jugadores.
+    pub const FIGHT: u32 = 65536;
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -42,6 +44,7 @@ pub struct Input {
     pub reseed: bool,
     pub chase: bool,
     pub fire: bool,
+    pub fight: bool,
 }
 
 impl Input {
@@ -63,6 +66,7 @@ impl Input {
             reseed: b & bits::RESEED != 0,
             chase: b & bits::CHASE != 0,
             fire: b & bits::FIRE != 0,
+            fight: b & bits::FIGHT != 0,
         }
     }
 }
